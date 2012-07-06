@@ -60,8 +60,32 @@ class Chef::Provider::Route < Chef::Provider
             '255.255.255.254'  => '31',
             '255.255.255.255'  => '32' }
 
+    def hex2ip(hex_data)
+      # Cleanup hex data
+      hex_ip = hex_data.to_s.downcase.gsub(/[^0-9a-f]/, '')
+
+      # Check hex data format (IP is a 32bit integer, so should be 8 chars long)
+      return nil if hex_ip.length != hex_data.length || hex_ip.length != 8
+
+      # Extract octets from hex data
+      octets = hex_ip.scan(/../).reverse.collect { |octet| [octet].pack('H2').unpack("C").first }
+
+      # Validate IP
+      ip = octets.join('.')
+      begin
+        IPAddr.new(ip, Socket::AF_INET).to_s
+      rescue ArgumentError
+        Chef::Log.debug("Invalid IP address data: hex=#{hex_ip}, ip=#{ip}")
+        return nil
+      end
+    end
+
+    def whyrun_supported?
+      true
+    end
+
     def load_current_resource
-      is_running = nil
+      self.is_running = false
 
       # cidr or quad dot mask
       if @new_resource.netmask
@@ -70,20 +94,22 @@ class Chef::Provider::Route < Chef::Provider
         new_ip = IPAddr.new(@new_resource.target)
       end
 
-      # pull routes from proc
+      # For linux, we use /proc/net/route file to read proc table info
       if node[:os] == "linux"
         route_file = ::File.open("/proc/net/route", "r")
+
+        # Read all routes
         while (line = route_file.gets)
-          # proc layout
+          # Get all the fields for a route
           iface,destination,gateway,flags,refcnt,use,metric,mask,mtu,window,irtt = line.split
 
-          # need to convert packed adresses int quad dot
-          #  the addrs are reversed hex packed decimal addrs. so this unwraps them. tho you could
-          #  do this without ipaddr using unpack. ipaddr has no htoa method.
-          #
-          destination = IPAddr.new(destination.scan(/../).reverse.to_s.hex, Socket::AF_INET).to_s
-          gateway = IPAddr.new(gateway.scan(/../).reverse.to_s.hex, Socket::AF_INET).to_s
-          mask = IPAddr.new(mask.scan(/../).reverse.to_s.hex, Socket::AF_INET).to_s
+          # Convert hex-encoded values to quad-dotted notation (e.g. 0064A8C0 => 192.168.100.0)
+          destination = hex2ip(destination)
+          gateway = hex2ip(gateway)
+          mask = hex2ip(mask)
+
+          # Skip formatting lines (header, etc)
+          next unless destination && gateway && mask
           Chef::Log.debug("#{@new_resource} system has route: dest=#{destination} mask=#{mask} gw=#{gateway}")
 
           # check if what were trying to configure is already there
@@ -93,9 +119,10 @@ class Chef::Provider::Route < Chef::Provider
           #
           running_ip = IPAddr.new("#{destination}/#{mask}")
           Chef::Log.debug("#{@new_resource} new ip: #{new_ip.inspect} running ip: #{running_ip.inspect}")
-          is_running = true if running_ip == new_ip
+          self.is_running = true if running_ip == new_ip && gateway == @new_resource.gateway
         end
-      route_file.close
+
+        route_file.close
       end
     end
 
@@ -105,10 +132,10 @@ class Chef::Provider::Route < Chef::Provider
         Chef::Log.debug("#{@new_resource} route already active - nothing to do")
       else
         command = generate_command(:add)
-
-        run_command( :command => command )
-        Chef::Log.info("#{@new_resource} added")
-        @new_resource.updated_by_last_action(true)
+        converge_by ("run #{ command } to add route") do
+          run_command( :command => command )
+          Chef::Log.info("#{@new_resource} added")
+        end
       end
 
       #for now we always write the file (ugly but its what it is)
@@ -118,10 +145,10 @@ class Chef::Provider::Route < Chef::Provider
     def action_delete
       if is_running
         command = generate_command(:delete)
-
-        run_command( :command => command )
-        Chef::Log.info("#{@new_resource} removed")
-        @new_resource.updated_by_last_action(true)
+        converge_by ("run #{ command } to delete route ") do
+          run_command( :command => command )
+          Chef::Log.info("#{@new_resource} removed")
+        end
       else
         Chef::Log.debug("#{@new_resource} route does not exist - nothing to do")
       end
@@ -130,7 +157,7 @@ class Chef::Provider::Route < Chef::Provider
     def generate_config
       conf = Hash.new
       case node[:platform]
-      when ("centos" || "redhat" || "fedora")
+      when "centos", "redhat", "fedora"
         # walk the collection
         run_context.resource_collection.each do |resource|
           if resource.is_a? Chef::Resource::Route
@@ -143,19 +170,22 @@ class Chef::Provider::Route < Chef::Provider
 
             conf[dev] = String.new if conf[dev].nil?
             if resource.action == :add
-              conf[dev] = config_file_contents(:add, :target => resource.target, :netmask => resource.netmask, :gateway => resource.gateway)
+              conf[dev] << config_file_contents(:add, :target => resource.target, :netmask => resource.netmask, :gateway => resource.gateway)
             else
               # need to do this for the case when the last route on an int
               # is removed
-              conf[dev] = config_file_contents(:delete)
+              conf[dev] << config_file_contents(:delete)
             end
           end
         end
         conf.each do |k, v|
-          network_file = ::File.new("/etc/sysconfig/network-scripts/route-#{k}", "w")
-          network_file.puts(conf[k])
-          Chef::Log.debug("#{@new_resource} writing route.#{k}\n#{conf[k]}")
-          network_file.close
+          network_file_name = "/etc/sysconfig/network-scripts/route-#{k}"
+          converge_by ("write route route.#{k}\n#{conf[k]} to #{ network_file_name }") do
+            network_file = ::File.new(network_file_name, "w")
+            network_file.puts(conf[k])
+            Chef::Log.debug("#{@new_resource} writing route.#{k}\n#{conf[k]}")
+            network_file.close
+          end
         end
       end
     end

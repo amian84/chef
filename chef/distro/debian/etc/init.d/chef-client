@@ -30,7 +30,11 @@ if [ ! -d /var/run/chef ]; then
   mkdir /var/run/chef
 fi
 
-DAEMON_OPTS="-d -P $PIDFILE -L $LOGFILE -c $CONFIG -i $INTERVAL -s $SPLAY"
+DAEMON_OPTS="-d -P $PIDFILE -c $CONFIG -i $INTERVAL -s $SPLAY"
+
+if [ ! -z $LOGFILE ]; then
+  DAEMON_OPTS="${DAEMON_OPTS} -L $LOGFILE"
+fi
 
 running_pid() {
   pid=$1
@@ -81,6 +85,19 @@ reload_server() {
      errcode=$?
    else
      start-stop-daemon --stop --signal HUP --quiet --pidfile $PIDFILE \
+       --user $DAEMONUSER \
+       --exec $DAEMON
+     errcode=$?
+   fi
+   return $errcode
+}
+
+run_server() {
+  if [ -z "$DAEMONUSER" ] ; then
+     killproc -p $PIDFILE $DAEMON -USR1
+     errcode=$?
+   else
+     start-stop-daemon --stop --signal USR1 --quiet --pidfile $PIDFILE \
        --user $DAEMONUSER \
        --exec $DAEMON
      errcode=$?
@@ -174,9 +191,17 @@ case "$1" in
       log_end_msg $errcode
     fi
     ;;
+  run)
+    if running; then
+      log_daemon_msg "Triggering run of $DESC" "$NAME"
+      errcode=0
+      run_server || errcode=$?
+      log_end_msg $errcode
+    fi
+    ;;
   *)
     N=/etc/init.d/$NAME
-    echo "Usage: $N {start|stop|force-stop|restart|force-reload|status}" >&2
+    echo "Usage: $N {start|stop|force-stop|restart|force-reload|status|run}" >&2
     exit 1
     ;;
 esac

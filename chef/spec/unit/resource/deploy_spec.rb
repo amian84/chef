@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::Deploy do
   
@@ -213,6 +213,20 @@ describe Chef::Resource::Deploy do
   it "allows deploy providers to be set via string" do
     @resource.provider "revision"
     @resource.provider.should == Chef::Provider::Deploy::Revision
+  end
+
+  it "defaults keep_releases to 5" do
+    @resource.keep_releases.should == 5
+  end
+
+  it "allows keep_releases to be set via integer" do
+    @resource.keep_releases 10
+    @resource.keep_releases.should == 10
+  end
+
+  it "enforces a minimum keep_releases of 1" do
+    @resource.keep_releases 0
+    @resource.keep_releases.should == 1
   end
 
 end

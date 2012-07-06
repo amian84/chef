@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path('../../../spec_helper', __FILE__)
+require 'spec_helper'
 require 'ostruct'
 
 describe Chef::Resource::Conditional do
@@ -45,6 +45,22 @@ describe Chef::Resource::Conditional do
 
       it "indicates that resource convergence should not continue" do
         @conditional.continue?.should be_false
+      end
+    end
+
+    describe 'after running a command which timed out' do
+      before do
+        @conditional = Chef::Resource::Conditional.only_if("false")
+        @conditional.stub(:shell_out).and_raise(Chef::Exceptions::CommandTimeout)
+      end
+
+      it 'indicates that resource convergence should not continue' do
+        @conditional.continue?.should be_false
+      end
+
+      it 'should log a warning' do
+        Chef::Log.should_receive(:warn).with("Command 'false' timed out")
+        @conditional.continue?
       end
     end
 
@@ -88,6 +104,22 @@ describe Chef::Resource::Conditional do
 
       it "indicates that resource convergence should continue" do
         @conditional.continue?.should be_true
+      end
+    end
+
+    describe 'after running a command which timed out' do
+      before do
+        @conditional = Chef::Resource::Conditional.not_if("false")
+        @conditional.stub(:shell_out).and_raise(Chef::Exceptions::CommandTimeout)
+      end
+
+      it 'indicates that resource convergence should continue' do
+        @conditional.continue?.should be_true
+      end
+
+      it 'should log a warning' do
+        Chef::Log.should_receive(:warn).with("Command 'false' timed out")
+        @conditional.continue?
       end
     end
 

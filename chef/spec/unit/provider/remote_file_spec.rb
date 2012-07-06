@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::RemoteFile, "action_create" do
   before(:each) do
@@ -25,7 +25,13 @@ describe Chef::Provider::RemoteFile, "action_create" do
     @resource.source("http://foo")
     @node = Chef::Node.new
     @node.name "latte"
+
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
+
     @provider = Chef::Provider::RemoteFile.new(@resource, @run_context)
+    #To prevent the current_resource.checksum from being overridden.
+    @provider.stub!(:load_current_resource)
   end
 
   describe "when checking if the file is at the target version" do
@@ -43,8 +49,8 @@ describe Chef::Provider::RemoteFile, "action_create" do
 
       @rest = mock(Chef::REST, { })
       Chef::REST.stub!(:new).and_return(@rest)
-      @rest.stub!(:fetch).and_yield(@tempfile)
-
+      @rest.stub!(:streaming_request).and_return(@tempfile)
+      @rest.stub!(:create_url) { |url| url } 
       @resource.cookbook_name = "monkey"
 
       @provider.stub!(:checksum).and_return("0fd012fdc96e96f8f7cf2046522a54aed0ce470224513e45da6bc1a17a4924aa")
@@ -69,7 +75,7 @@ describe Chef::Provider::RemoteFile, "action_create" do
       end
 
       it "raises a specific error describing the problem" do
-        lambda {@provider.action_create}.should raise_error(Chef::Exceptions::EnclosingDirectoryDoesNotExist)
+        lambda {@provider.run_action(:create)}.should raise_error(Chef::Exceptions::EnclosingDirectoryDoesNotExist)
       end
     end
 
@@ -82,11 +88,11 @@ describe Chef::Provider::RemoteFile, "action_create" do
 
         it "does not download the file" do
           @rest.should_not_receive(:fetch).with("http://opscode.com/seattle.txt").and_return(@tempfile)
-          @provider.action_create
+          @provider.run_action(:create)
         end
 
         it "does not update the resource" do
-          @provider.action_create
+          @provider.run_action(:create)
           @provider.new_resource.should_not be_updated
         end
 
@@ -99,11 +105,11 @@ describe Chef::Provider::RemoteFile, "action_create" do
 
         it "should not download the file if the checksum is a partial match from the beginning" do
           @rest.should_not_receive(:fetch).with("http://opscode.com/seattle.txt").and_return(@tempfile)
-          @provider.action_create
+          @provider.run_action(:create)
         end
 
         it "does not update the resource" do
-          @provider.action_create
+          @provider.run_action(:create)
           @provider.new_resource.should_not be_updated
         end
 
@@ -112,15 +118,15 @@ describe Chef::Provider::RemoteFile, "action_create" do
       describe "and the existing file doesn't match the given checksum" do
         it "downloads the file" do
           @resource.checksum("this hash doesn't match")
-          @rest.should_receive(:fetch).with("http://opscode.com/seattle.txt").and_return(@tempfile)
-          @provider.action_create
+          @rest.should_receive(:streaming_request).with("http://opscode.com/seattle.txt", {}).and_return(@tempfile)
+          @provider.run_action(:create)
         end
 
         it "does not consider the checksum a match if the matching string is offset" do
           # i.e., the existing file is      "0fd012fdc96e96f8f7cf2046522a54aed0ce470224513e45da6bc1a17a4924aa"
           @resource.checksum("fd012fd")
-          @rest.should_receive(:fetch).with("http://opscode.com/seattle.txt").and_return(@tempfile)
-          @provider.action_create
+          @rest.should_receive(:streaming_request).with("http://opscode.com/seattle.txt", {}).and_return(@tempfile)
+          @provider.run_action(:create)
         end
       end
 
@@ -129,7 +135,39 @@ describe Chef::Provider::RemoteFile, "action_create" do
     describe "and the resource doesn't specify a checksum" do
       it "should download the file from the remote URL" do
         @resource.checksum(nil)
-        @rest.should_receive(:fetch).with("http://opscode.com/seattle.txt").and_return(@tempfile)
+        @rest.should_receive(:streaming_request).with("http://opscode.com/seattle.txt", {}).and_return(@tempfile)
+        @provider.run_action(:create)
+      end
+    end
+
+    # CHEF-3140
+    # Some servers return tarballs as content type tar and encoding gzip, which
+    # is totally wrong. When this happens and gzip isn't disabled, Chef::REST
+    # will decompress the file for you, which is not at all what you expected
+    # to happen (you end up with an uncomressed tar archive instead of the
+    # gzipped tar archive you expected). To work around this behavior, we
+    # detect when users are fetching gzipped files and turn off gzip in
+    # Chef::REST.
+
+    context "and the target file is a tarball" do
+      before do
+        @resource.path(File.expand_path(File.join(CHEF_SPEC_DATA, "seattle.tar.gz")))
+        Chef::REST.should_receive(:new).with("http://opscode.com/seattle.txt", nil, nil, :disable_gzip => true).and_return(@rest)
+      end
+
+      it "disables gzip in the http client" do
+        @provider.action_create
+      end
+
+    end
+
+    context "and the source appears to be a tarball" do
+      before do
+        @resource.source("http://example.com/tarball.tgz")
+        Chef::REST.should_receive(:new).with("http://example.com/tarball.tgz", nil, nil, :disable_gzip => true).and_return(@rest)
+      end
+
+      it "disables gzip in the http client" do
         @provider.action_create
       end
     end
@@ -137,20 +175,20 @@ describe Chef::Provider::RemoteFile, "action_create" do
     it "should raise an exception if it's any other kind of retriable response than 304" do
       r = Net::HTTPMovedPermanently.new("one", "two", "three")
       e = Net::HTTPRetriableError.new("301", r)
-      @rest.stub!(:fetch).and_raise(e)
-      lambda { @provider.action_create }.should raise_error(Net::HTTPRetriableError)
+      @rest.stub!(:streaming_request).and_raise(e)
+      lambda { @provider.run_action(:create) }.should raise_error(Net::HTTPRetriableError)
     end
 
     it "should raise an exception if anything else happens" do
       r = Net::HTTPBadRequest.new("one", "two", "three")
       e = Net::HTTPServerException.new("fake exception", r)
-      @rest.stub!(:fetch).and_raise(e)
-      lambda { @provider.action_create }.should raise_error(Net::HTTPServerException)
+      @rest.stub!(:streaming_request).and_raise(e)
+      lambda { @provider.run_action(:create) }.should raise_error(Net::HTTPServerException)
     end
 
     it "should checksum the raw file" do
       @provider.should_receive(:checksum).with(@tempfile.path).and_return("0fd012fdc96e96f8f7cf2046522a54aed0ce470224513e45da6bc1a17a4924aa")
-      @provider.action_create
+      @provider.run_action(:create)
     end
 
     describe "when the target file does not exist" do
@@ -161,12 +199,19 @@ describe Chef::Provider::RemoteFile, "action_create" do
 
       it "should copy the raw file to the new resource" do
         FileUtils.should_receive(:cp).with(@tempfile.path, @resource.path).and_return(true)
-        @provider.action_create
+        @provider.run_action(:create)
       end
 
       it "should set the new resource to updated" do
-        @provider.action_create
+        @provider.run_action(:create)
         @resource.should be_updated
+      end
+
+      describe "and create_if_missing is invoked" do
+        it "should invoke action_create" do
+          @provider.should_receive(:action_create)
+          @provider.run_action(:create_if_missing)
+        end
       end
     end
 
@@ -176,14 +221,21 @@ describe Chef::Provider::RemoteFile, "action_create" do
         @provider.stub!(:get_from_server).and_return(@tempfile)
       end
 
+      describe "and create_if_missing is invoked" do
+        it "should take no action" do
+          @provider.should_not_receive(:action_create) 
+          @provider.run_action(:create_if_missing)
+        end
+      end
+
       describe "and the file downloaded from the remote is identical to the current" do
         it "shouldn't backup the original file" do
           @provider.should_not_receive(:backup).with(@resource.path)
-          @provider.action_create
+          @provider.run_action(:create)
         end
 
         it "doesn't mark the resource as updated" do
-          @provider.action_create
+          @provider.run_action(:create)
           @provider.new_resource.should_not be_updated
         end
       end
@@ -196,23 +248,23 @@ describe Chef::Provider::RemoteFile, "action_create" do
 
         it "should backup the original file" do
           @provider.should_receive(:backup).with(@resource.path).and_return(true)
-          @provider.action_create
+          @provider.run_action(:create)
         end
 
         it "should copy the raw file to the new resource" do
           FileUtils.should_receive(:cp).with(@tempfile.path, @resource.path).and_return(true)
-          @provider.action_create
+          @provider.run_action(:create)
         end
 
         it "should set the new resource to updated" do
-          @provider.action_create
+          @provider.run_action(:create)
           @resource.should be_updated
         end
       end
 
       it "should set permissions" do
-        @provider.should_receive(:enforce_ownership_and_permissions).and_return(true)
-        @provider.action_create
+        @provider.should_receive(:set_all_access_controls).and_return(true)
+        @provider.run_action(:create)
       end
 
 

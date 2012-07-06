@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Service::Upstart do
   before(:each) do
@@ -25,7 +25,8 @@ describe Chef::Provider::Service::Upstart do
     @node[:platform] = 'ubuntu'
     @node[:platform_version] = '9.10'
 
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
 
     @new_resource = Chef::Resource::Service.new("rsyslog")
     @provider = Chef::Provider::Service::Upstart.new(@new_resource, @run_context)
@@ -72,7 +73,7 @@ describe Chef::Provider::Service::Upstart do
       @stdout = StringIO.new
       @stderr = StringIO.new
       @pid = mock("PID")
-
+      
       ::File.stub!(:exists?).and_return(true)
       ::File.stub!(:open).and_return(true)
     end
@@ -153,6 +154,13 @@ describe Chef::Provider::Service::Upstart do
       @provider.load_current_resource
     end
 
+
+    it "should track state when the upstart configuration file fails to load" do
+      File.should_receive(:exists?).and_return false
+      @provider.load_current_resource
+      @provider.instance_variable_get("@config_file_found").should == false
+    end
+
     describe "when a status command has been specified" do
       before do
         @new_resource.stub!(:status_command).and_return("/bin/chefhasmonkeypants status")
@@ -164,6 +172,12 @@ describe Chef::Provider::Service::Upstart do
         @provider.load_current_resource
       end
 
+      it "should track state when the user-provided status command fails" do 
+        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_raise(Chef::Exceptions::Exec)
+        @provider.load_current_resource
+        @provider.instance_variable_get("@command_success").should == false
+      end
+
       it "should set running to false if it catches a Chef::Exceptions::Exec when using a status command" do
         @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_raise(Chef::Exceptions::Exec)
         @current_resource.should_receive(:running).with(false)
@@ -171,9 +185,16 @@ describe Chef::Provider::Service::Upstart do
       end
     end
 
+    it "should track state when we fail to obtain service status via upstart_state" do
+      @provider.should_receive(:upstart_state).and_raise Chef::Exceptions::Exec
+      @provider.load_current_resource
+      @provider.instance_variable_get("@command_success").should == false
+    end
+    
     it "should return the current resource" do
       @provider.load_current_resource.should eql(@current_resource)
     end
+
 
   end
 
@@ -215,7 +236,7 @@ describe Chef::Provider::Service::Upstart do
 
     it "should call the start command if one is specified" do
       @new_resource.stub!(:start_command).and_return("/sbin/rsyslog startyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog startyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog startyousillysally")
       @provider.start_service()
     end
 
@@ -230,10 +251,19 @@ describe Chef::Provider::Service::Upstart do
       @provider.start_service()
     end
 
+    it "should pass parameters to the start command if they are provided" do
+      @new_resource = Chef::Resource::Service.new("rsyslog")
+      @new_resource.parameters({ "OSD_ID" => "2" })
+      @provider = Chef::Provider::Service::Upstart.new(@new_resource, @run_context)
+      @provider.current_resource = @current_resource
+      @provider.should_receive(:run_command_with_systems_locale).with({:command => "/sbin/start rsyslog OSD_ID=2"}).and_return(0)
+      @provider.start_service()
+    end
+
     it "should call the restart command if one is specified" do
       @current_resource.stub!(:running).and_return(true)
       @new_resource.stub!(:restart_command).and_return("/sbin/rsyslog restartyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog restartyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog restartyousillysally")
       @provider.restart_service()
     end
 
@@ -252,7 +282,7 @@ describe Chef::Provider::Service::Upstart do
     it "should call the reload command if one is specified" do
       @current_resource.stub!(:running).and_return(true)
       @new_resource.stub!(:reload_command).and_return("/sbin/rsyslog reloadyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog reloadyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog reloadyousillysally")
       @provider.reload_service()
     end
 
@@ -265,7 +295,7 @@ describe Chef::Provider::Service::Upstart do
     it "should call the stop command if one is specified" do
       @current_resource.stub!(:running).and_return(true)
       @new_resource.stub!(:stop_command).and_return("/sbin/rsyslog stopyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog stopyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog stopyousillysally")
       @provider.stop_service()
     end
 

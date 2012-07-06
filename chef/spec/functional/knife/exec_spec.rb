@@ -16,8 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
-
+require 'spec_helper'
 require 'tiny_server'
 
 describe Chef::Knife::Exec do
@@ -44,7 +43,9 @@ describe Chef::Knife::Exec do
     @server.stop
   end
 
-  it "executes a script in the context of the shef main context" do
+  pending "executes a script in the context of the shef main context", :ruby_18_only
+
+  it "executes a script in the context of the shef main context", :ruby_19_only do
     @node = Chef::Node.new
     @node.name("ohai-world")
     response = {"rows" => [@node],"start" => 0,"total" => 1}

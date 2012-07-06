@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::RemoteDirectory do
   include_context Chef::Resource::Directory
@@ -28,7 +28,8 @@ describe Chef::Resource::RemoteDirectory do
     Chef::Cookbook::FileVendor.on_create { |manifest| Chef::Cookbook::FileSystemFileVendor.new(manifest, cookbook_repo) }
     node = Chef::Node.new
     cookbook_collection = Chef::CookbookCollection.new(Chef::CookbookLoader.new(cookbook_repo))
-    run_context = Chef::RunContext.new(node, cookbook_collection)
+    events = Chef::EventDispatch::Dispatcher.new
+    run_context = Chef::RunContext.new(node, cookbook_collection, events)
 
     resource = Chef::Resource::RemoteDirectory.new(path, run_context)
     resource.source "remotedir"

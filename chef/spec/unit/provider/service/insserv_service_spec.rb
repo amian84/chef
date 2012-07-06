@@ -16,20 +16,21 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Service::Insserv do
   before(:each) do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @node[:command] = {:ps => "ps -ax"}
 
     @new_resource = Chef::Resource::Service.new("initgrediant")
     @current_resource = Chef::Resource::Service.new("initgrediant")
 
     @provider = Chef::Provider::Service::Insserv.new(@new_resource, @run_context)
-    @status = mock("Process::Status mock", :exitstatus => 0)
-    @provider.stub!(:popen4).and_return(@status)
+    @status = mock("Process::Status mock", :exitstatus => 0, :stdout => "")
+    @provider.stub!(:shell_out!).and_return(@status)
   end
 
   describe "load_current_resource" do

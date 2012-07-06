@@ -21,7 +21,7 @@ require 'chef/resource'
 class Chef
   class Resource
     class Mdadm < Chef::Resource
-      
+
       def initialize(name, run_context=nil)
         super
         @resource_name = :mdadm
@@ -30,6 +30,8 @@ class Chef
         @devices = []
         @exists = false
         @level = 1
+        @metadata = "0.90"
+        @bitmap = nil
         @raid_device = name
 
         @action = :create
@@ -65,6 +67,22 @@ class Chef
           :level,
           arg,
           :kind_of => [ Integer ]
+        )
+      end
+
+      def metadata(arg=nil)
+        set_or_return(
+          :metadata,
+          arg,
+          :kind_of => [ String ]
+        )
+      end
+
+      def bitmap(arg=nil)
+        set_or_return(
+          :bitmap,
+          arg,
+          :kind_of => [ String ]
         )
       end
 

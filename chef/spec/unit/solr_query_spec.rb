@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-require File.expand_path("../../spec_helper", __FILE__)
+require 'spec_helper'
 
 require 'chef/solr_query'
 require 'net/http'
@@ -58,7 +58,7 @@ describe Chef::SolrQuery do
 
   it "filters by type for data bag items" do
     @solr.filter_by_type("users")
-    @solr.filter_query.should == '+X_CHEF_type_CHEF_X:data_bag_item +data_bag:users'
+    @solr.filter_query.split(" ").sort.should == ['+X_CHEF_type_CHEF_X:data_bag_item', '+data_bag:users']
   end
 
   it "stores the main query" do

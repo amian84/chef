@@ -22,10 +22,10 @@ require 'chef/win32/api/security'
 require 'chef/win32/error'
 
 class Chef
-  module Win32
+  module ReservedNames::Win32
     class File
-      include Chef::Win32::API::File
-      extend Chef::Win32::API::File
+      include Chef::ReservedNames::Win32::API::File
+      extend Chef::ReservedNames::Win32::API::File
 
       # Creates a symbolic link called +new_name+ for the file or directory
       # +old_name+.
@@ -40,7 +40,7 @@ class Chef
         old_name = encode_path(old_name)
         new_name = encode_path(new_name)
         unless CreateHardLinkW(new_name, old_name, nil)
-          Chef::Win32::Error.raise!
+          Chef::ReservedNames::Win32::Error.raise!
         end
       end
 
@@ -51,14 +51,14 @@ class Chef
       # returns nil as per MRI.
       #
       def self.symlink(old_name, new_name)
-        raise Errno::ENOENT, "(#{old_name}, #{new_name})" unless ::File.exist?(old_name)
+        # raise Errno::ENOENT, "(#{old_name}, #{new_name})" unless ::File.exist?(old_name)
         # TODO do a check for CreateSymbolicLinkW and
         # raise NotImplemented exception on older Windows
         flags = ::File.directory?(old_name) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0
         old_name = encode_path(old_name)
         new_name = encode_path(new_name)
         unless CreateSymbolicLinkW(new_name, old_name, flags)
-          Chef::Win32::Error.raise!
+          Chef::ReservedNames::Win32::Error.raise!
         end
       end
 
@@ -88,21 +88,71 @@ class Chef
       # will raise a NotImplementedError, as per MRI.
       #
       def self.readlink(link_name)
-        raise Errno::ENOENT, link_name unless ::File.exist?(link_name)
-        # TODO do a check for GetFinalPathNameByHandleW and
-        # raise NotImplemented exception on older Windows
-        file_handle(link_name) do |handle|
-          buffer = FFI::MemoryPointer.new(0.chr * MAX_PATH)
-          num_chars = GetFinalPathNameByHandleW(handle, buffer, buffer.size, FILE_NAME_NORMALIZED)
-          if num_chars == 0
-            Chef::Win32::Error.raise! #could be misleading if problem is too small buffer size as GetLastError won't report failure
+        raise Errno::ENOENT, link_name unless ::File.exists?(link_name)
+        symlink_file_handle(link_name) do |handle|
+          # Go to DeviceIoControl to get the symlink information
+          # http://msdn.microsoft.com/en-us/library/windows/desktop/aa364571(v=vs.85).aspx
+          reparse_buffer = FFI::MemoryPointer.new(MAXIMUM_REPARSE_DATA_BUFFER_SIZE)
+          parsed_size = FFI::Buffer.new(:long).write_long(0)
+          if DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nil, 0, reparse_buffer, MAXIMUM_REPARSE_DATA_BUFFER_SIZE, parsed_size, nil) == 0
+            Chef::ReservedNames::Win32::Error.raise!
           end
-          buffer.read_wstring(num_chars).sub(path_prepender, "")
+
+          # Ensure it's a symbolic link
+          reparse_buffer = REPARSE_DATA_BUFFER.new(reparse_buffer)
+          if reparse_buffer[:ReparseTag] != IO_REPARSE_TAG_SYMLINK
+            raise Errno::EACCES, "#{link_name} is not a symlink"
+          end
+
+          # Return the link destination (strip off \??\ at the beginning, which is a local filesystem thing)
+          link_dest = reparse_buffer.reparse_buffer.substitute_name
+          if link_dest =~ /^\\\?\?\\/
+            link_dest = link_dest[4..-1]
+          end
+          link_dest
         end
+      end
+
+      # Gets the short form of a path (Administrator -> ADMINI~1)
+      def self.get_short_path_name(path)
+        path = path.to_wstring
+        size = GetShortPathNameW(path, nil, 0)
+        if size == 0
+          Chef::ReservedNames::Win32::Error.raise!
+        end
+        result = FFI::MemoryPointer.new :char, (size+1)*2
+        if GetShortPathNameW(path, result, size+1) == 0
+          Chef::ReservedNames::Win32::Error.raise!
+        end
+        result.read_wstring(size)
+      end
+
+      # Gets the long form of a path (ADMINI~1 -> Administrator)
+      def self.get_long_path_name(path)
+        path = path.to_wstring
+        size = GetLongPathNameW(path, nil, 0)
+        if size == 0
+          Chef::ReservedNames::Win32::Error.raise!
+        end
+        result = FFI::MemoryPointer.new :char, (size+1)*2
+        if GetLongPathNameW(path, result, size+1) == 0
+          Chef::ReservedNames::Win32::Error.raise!
+        end
+        result.read_wstring(size)
       end
 
       def self.info(file_name)
         Info.new(file_name)
+      end
+
+      def self.verify_links_supported!
+        begin
+          CreateSymbolicLinkW(nil)
+        rescue Chef::Exceptions::Win32APIFunctionNotImplemented => e
+          raise e
+        rescue Exception
+          # things are ok.
+        end
       end
 
       # ::File compat

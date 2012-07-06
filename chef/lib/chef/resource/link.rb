@@ -39,7 +39,7 @@ class Chef
 
       def to(arg=nil)
         set_or_return(
-          :source_file,
+          :to,
           arg,
           :kind_of => String
         )
@@ -78,6 +78,10 @@ class Chef
         )
       end
 
+      # make link quack like a file (XXX: not for public consumption)
+      def path
+        @target_file
+      end
     end
   end
 end

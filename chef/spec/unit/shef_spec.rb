@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 require "ostruct"
 
 ObjectTestHarness = Proc.new do
@@ -80,7 +80,8 @@ describe Shef do
       Shef.configure_irb
 
       conf = OpenStruct.new
-      conf.main = Chef::Recipe.new(nil,nil,Chef::RunContext.new(Chef::Node.new, {}))
+      events = Chef::EventDispatch::Dispatcher.new
+      conf.main = Chef::Recipe.new(nil,nil,Chef::RunContext.new(Chef::Node.new, {}, events))
       Shef.irb_conf[:IRB_RC].call(conf)
       conf.prompt_c.should      == "chef:recipe > "
       conf.prompt_i.should      == "chef:recipe > "

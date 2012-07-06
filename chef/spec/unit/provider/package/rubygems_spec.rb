@@ -28,7 +28,7 @@ module GemspecBackcompatCreator
   end
 end
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 require 'ostruct'
 
 describe Chef::Provider::Package::Rubygems::CurrentGemEnvironment do
@@ -44,7 +44,11 @@ describe Chef::Provider::Package::Rubygems::CurrentGemEnvironment do
 
   it "determines the installed versions of gems from Gem.source_index" do
     gems = [gemspec('rspec-core', Gem::Version.new('1.2.9')), gemspec('rspec-core', Gem::Version.new('1.3.0'))]
-    Gem.source_index.should_receive(:search).with(Gem::Dependency.new('rspec-core', nil)).and_return(gems)
+    if Gem::Version.new(Gem::VERSION) >= Gem::Version.new('1.8.0')
+      Gem::Specification.should_receive(:find_all_by_name).with('rspec-core', Gem::Dependency.new('rspec-core').requirement).and_return(gems)
+    else
+      Gem.source_index.should_receive(:search).with(Gem::Dependency.new('rspec-core', nil)).and_return(gems)
+    end
     @gem_env.installed_versions(Gem::Dependency.new('rspec-core', nil)).should == gems
   end
 
@@ -183,15 +187,26 @@ describe Chef::Provider::Package::Rubygems::AlternateGemEnvironment do
   end
 
   it "builds the gems source index from the gem paths" do
-    Gem::SourceIndex.should_receive(:from_gems_in).with('/path/to/gems/specifications', '/another/path/to/gems/specifications')
     @gem_env.stub!(:gem_paths).and_return(['/path/to/gems', '/another/path/to/gems'])
-    @gem_env.gem_source_index
+    if Gem::Version.new(Gem::VERSION) >= Gem::Version.new('1.8.0')
+      @gem_env.gem_specification
+      Gem::Specification.dirs.should == [ '/path/to/gems/specifications', '/another/path/to/gems/specifications' ]
+    else
+      Gem::SourceIndex.should_receive(:from_gems_in).with('/path/to/gems/specifications', '/another/path/to/gems/specifications')
+      @gem_env.gem_source_index
+    end
   end
 
   it "determines the installed versions of gems from the source index" do
     gems = [gemspec('rspec', Gem::Version.new('1.2.9')), gemspec('rspec', Gem::Version.new('1.3.0'))]
-    @gem_env.stub!(:gem_source_index).and_return(Gem.source_index)
-    @gem_env.gem_source_index.should_receive(:search).with(Gem::Dependency.new('rspec', nil)).and_return(gems)
+    rspec_dep = Gem::Dependency.new('rspec', nil)
+    if Gem::Version.new(Gem::VERSION) >= Gem::Version.new('1.8.0')
+      @gem_env.stub!(:gem_specification).and_return(Gem::Specification)
+      @gem_env.gem_specification.should_receive(:find_all_by_name).with(rspec_dep.name, rspec_dep.requirement).and_return(gems)
+    else
+      @gem_env.stub!(:gem_source_index).and_return(Gem.source_index)
+      @gem_env.gem_source_index.should_receive(:search).with(rspec_dep).and_return(gems)
+    end
     @gem_env.installed_versions(Gem::Dependency.new('rspec', nil)).should == gems
   end
 
@@ -305,7 +320,8 @@ describe Chef::Provider::Package::Rubygems do
     @node = Chef::Node.new
     @new_resource = Chef::Resource::GemPackage.new("rspec-core")
     @spec_version = @new_resource.version RSpec::Core::Version::STRING
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
 
     # We choose detect omnibus via RbConfig::CONFIG['bindir'] in Chef::Provider::Package::Rubygems.new
     RbConfig::CONFIG.stub!(:[]).with('bindir').and_return("/usr/bin/ruby")
@@ -329,11 +345,11 @@ describe Chef::Provider::Package::Rubygems do
 
   it "searches for a gem binary when running on Omnibus on Unix" do
     platform_mock :unix do
-      RbConfig::CONFIG.stub!(:[]).with('bindir').and_return("/opt/opscode/embedded/bin")
-      ENV.stub!(:[]).with('PATH').and_return("/usr/bin:/usr/sbin:/opt/opscode/embedded/bin")
+      RbConfig::CONFIG.stub!(:[]).with('bindir').and_return("/opt/chef/embedded/bin")
+      ENV.stub!(:[]).with('PATH').and_return("/usr/bin:/usr/sbin:/opt/chef/embedded/bin")
       File.stub!(:exists?).with('/usr/bin/gem').and_return(false)
       File.stub!(:exists?).with('/usr/sbin/gem').and_return(true)
-      File.stub!(:exists?).with('/opt/opscode/embedded/bin/gem').and_return(true) # should not get here
+      File.stub!(:exists?).with('/opt/chef/embedded/bin/gem').and_return(true) # should not get here
       provider = Chef::Provider::Package::Rubygems.new(@new_resource, @run_context)
       provider.gem_env.gem_binary_location.should == '/usr/sbin/gem'
     end
@@ -416,12 +432,14 @@ describe Chef::Provider::Package::Rubygems do
       @current_resource = Chef::Resource::GemPackage.new('rspec-core')
       @provider.current_resource = @current_resource
       @gem_dep = Gem::Dependency.new('rspec-core', @spec_version)
+      @provider.stub!(:load_current_resource)
     end
 
     describe "in the current gem environment" do
       it "installs the gem via the gems api when no explicit options are used" do
         @provider.gem_env.should_receive(:install).with(@gem_dep, :sources => nil)
         @provider.action_install.should be_true
+        @provider.converge
       end
 
       it "installs the gem via the gems api when a remote source is provided" do
@@ -429,12 +447,14 @@ describe Chef::Provider::Package::Rubygems do
         sources = ['http://gems.example.org']
         @provider.gem_env.should_receive(:install).with(@gem_dep, :sources => sources)
         @provider.action_install.should be_true
+        @provider.converge
       end
 
       it "installs the gem from file via the gems api when no explicit options are used" do
         @new_resource.source(CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem')
         @provider.gem_env.should_receive(:install).with(CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem')
         @provider.action_install.should be_true
+        @provider.converge
       end
 
       it "installs the gem from file via the gems api when the package is a path and the source is nil" do
@@ -444,6 +464,7 @@ describe Chef::Provider::Package::Rubygems do
         @new_resource.source.should == CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem'
         @provider.gem_env.should_receive(:install).with(CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem')
         @provider.action_install.should be_true
+        @provider.converge
       end
 
       # this catches 'gem_package "foo"' when "./foo" is a file in the cwd, and instead of installing './foo' it fetches the remote gem
@@ -452,6 +473,7 @@ describe Chef::Provider::Package::Rubygems do
         @new_resource.package_name('rspec-core')
         @provider.gem_env.should_receive(:install).with(@gem_dep, :sources => nil)
         @provider.action_install.should be_true
+        @provider.converge
       end
 
       it "installs the gem by shelling out when options are provided as a String" do
@@ -459,24 +481,44 @@ describe Chef::Provider::Package::Rubygems do
         expected ="gem install rspec-core -q --no-rdoc --no-ri -v \"#{@spec_version}\" -i /alt/install/location"
         @provider.should_receive(:shell_out!).with(expected, :env => nil)
         @provider.action_install.should be_true
+        @provider.converge
       end
 
       it "installs the gem via the gems api when options are given as a Hash" do
         @new_resource.options(:install_dir => '/alt/install/location')
         @provider.gem_env.should_receive(:install).with(@gem_dep, :sources => nil, :install_dir => '/alt/install/location')
         @provider.action_install.should be_true
+        @provider.converge
       end
+
       describe "at a specific version" do
         before do
-          @current_resource = Chef::Resource::GemPackage.new("rspec-core")
-          @current_resource.version("2.4.0")
-
           @gem_dep = Gem::Dependency.new('rspec-core', @spec_version)
         end
 
         it "installs the gem via the gems api" do
           @provider.gem_env.should_receive(:install).with(@gem_dep, :sources => nil)
           @provider.action_install.should be_true
+          @provider.converge
+        end
+      end
+      describe "at version specified with comparison operator" do
+        it "skips install if current version satisifies requested version" do
+          @current_resource.stub(:version).and_return("2.3.3")
+          @new_resource.stub(:version).and_return(">=2.3.0")
+
+          @provider.gem_env.should_not_receive(:install)
+          @provider.action_install
+          @provider.converge
+        end
+
+        it "allows user to specify gem version with fuzzy operator" do
+          @current_resource.stub(:version).and_return("2.3.3")
+          @new_resource.stub(:version).and_return("~>2.3.0")
+
+          @provider.gem_env.should_not_receive(:install)
+          @provider.action_install
+          @provider.converge
         end
       end
     end
@@ -486,6 +528,28 @@ describe Chef::Provider::Package::Rubygems do
         @new_resource.gem_binary('/usr/weird/bin/gem')
         @provider.should_receive(:shell_out!).with("/usr/weird/bin/gem install rspec-core -q --no-rdoc --no-ri -v \"#{@spec_version}\"", :env=>nil)
         @provider.action_install.should be_true
+        @provider.converge
+      end
+
+      it "installs the gem from file by shelling out to gem install" do
+        @new_resource.gem_binary('/usr/weird/bin/gem')
+        @new_resource.source(CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem')
+        @new_resource.version('>= 0')
+        @provider.should_receive(:shell_out!).with("/usr/weird/bin/gem install #{CHEF_SPEC_DATA}/gems/chef-integration-test-0.1.0.gem -q --no-rdoc --no-ri -v \">= 0\"", :env=>nil)
+        @provider.action_install.should be_true
+        @provider.converge
+      end
+
+      it "installs the gem from file by shelling out to gem install when the package is a path and the source is nil" do
+        @new_resource = Chef::Resource::GemPackage.new(CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem')
+        @provider = Chef::Provider::Package::Rubygems.new(@new_resource, @run_context)
+        @provider.current_resource = @current_resource
+        @new_resource.gem_binary('/usr/weird/bin/gem')
+        @new_resource.version('>= 0')
+        @new_resource.source.should == CHEF_SPEC_DATA + '/gems/chef-integration-test-0.1.0.gem'
+        @provider.should_receive(:shell_out!).with("/usr/weird/bin/gem install #{CHEF_SPEC_DATA}/gems/chef-integration-test-0.1.0.gem -q --no-rdoc --no-ri -v \">= 0\"", :env=>nil)
+        @provider.action_install.should be_true
+        @provider.converge
       end
     end
 
@@ -508,6 +572,7 @@ describe Chef::Provider::Package::Rubygems do
         # the behavior we're testing:
         @provider.gem_env.should_receive(:uninstall).with('rspec', nil)
         @provider.action_remove
+        @provider.converge
       end
 
       it "uninstalls via the api when options are given as a Hash" do
@@ -518,18 +583,21 @@ describe Chef::Provider::Package::Rubygems do
         @new_resource.options(:install_dir => '/alt/install/location')
         @provider.gem_env.should_receive(:uninstall).with('rspec', nil, :install_dir => '/alt/install/location')
         @provider.action_remove
+        @provider.converge
       end
 
       it "uninstalls via the gem command when options are given as a String" do
         @new_resource.options('-i /alt/install/location')
         @provider.should_receive(:shell_out!).with("gem uninstall rspec -q -x -I -a -i /alt/install/location", :env=>nil)
         @provider.action_remove
+        @provider.converge
       end
 
       it "uninstalls a specific version of a gem when a version is provided" do
         @new_resource.version('1.2.3')
         @provider.gem_env.should_receive(:uninstall).with('rspec', '1.2.3')
         @provider.action_remove
+        @provider.converge
       end
     end
 
@@ -538,7 +606,9 @@ describe Chef::Provider::Package::Rubygems do
         @new_resource.gem_binary('/usr/weird/bin/gem')
         @provider.should_receive(:shell_out!).with("/usr/weird/bin/gem uninstall rspec -q -x -I -a", :env=>nil)
         @provider.action_remove
+        @provider.converge
       end
     end
   end
 end
+

@@ -16,9 +16,14 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Config do
+  before(:all) do
+    @original_config = Chef::Config.hash_dup
+    @original_env = { 'HOME' => ENV['HOME'], 'SYSTEMDRIVE' => ENV['SYSTEMDRIVE'], 'HOMEPATH' => ENV['HOMEPATH'], 'USERPROFILE' => ENV['USERPROFILE'] }
+  end
+
   describe "config attribute writer: chef_server_url" do
     before do
       Chef::Config.chef_server_url = "https://junglist.gen.nz"
@@ -169,5 +174,30 @@ describe Chef::Config do
 
       Chef::Config[:data_bag_path].should == data_bag_path
     end
+  end
+
+  describe "Chef::Config[:user_home]" do
+    it "should set when HOME is provided" do
+      ENV['HOME'] = "/home/kitten"
+      load File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "lib", "chef", "config.rb"))
+      Chef::Config[:user_home].should == "/home/kitten"
+    end
+
+    it "should be set when only USERPROFILE is provided" do
+      ENV['HOME'], ENV['SYSTEMDRIVE'],  ENV['HOMEPATH'] = nil, nil, nil
+      ENV['USERPROFILE'] = "/users/kitten"
+      load File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "lib", "chef", "config.rb"))
+      Chef::Config[:user_home].should == "/users/kitten"
+    end
+
+    after(:each) do
+      @original_env.each do |env_setting|
+        ENV[env_setting[0]] = env_setting[1]
+      end
+    end
+  end
+
+  after(:each) do
+    Chef::Config.configuration = @original_config
   end
 end

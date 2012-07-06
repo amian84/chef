@@ -2,8 +2,18 @@ source :rubygems
 
 gemspec
 
-gem "dep_selector", :group => :development, :platform => "ruby"
+gem "dep_selector", :group => :server, :platform => "ruby"
 gem "activesupport", :group => :compat_testing, :platform => "ruby"
+gem "ronn"
+
+group(:development, :test) do
+  gem 'rack'
+  # thin requires eventmachine, which won't work under Ruby 1.9 on Windows
+  # http://gembundler.com/man/gemfile.5.html
+  gem 'thin', :platforms => :ruby
+#  gem 'awesome_print'
+#  gem 'pry'
+end
 
 platforms :mswin, :mingw do
   gem "ffi", "1.0.9"
@@ -21,3 +31,7 @@ end
 platforms :mingw_18 do
   gem "win32-open3", "0.3.2"
 end
+
+# If you want to load debugging tools into the bundle exec sandbox,
+# add these additional dependencies into chef/Gemfile.local
+eval(IO.read(__FILE__ + '.local'), binding) if File.exists?(__FILE__ + '.local')

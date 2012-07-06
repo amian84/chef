@@ -26,9 +26,13 @@ class Chef
         require 'net/ssh'
         require 'net/ssh/multi'
         require 'readline'
+        require 'chef/exceptions'
         require 'chef/search/query'
-        require 'chef/mixin/command'
+        require 'chef/mixin/shell_out'
+        require 'mixlib/shellout'
       end
+
+      include Chef::Mixin::ShellOut
 
       attr_writer :password
 
@@ -45,7 +49,7 @@ class Chef
         :short => "-a ATTR",
         :long => "--attribute ATTR",
         :description => "The attribute to use for opening the connection - default is fqdn",
-        :default => "fqdn"
+        :proc => Proc.new { |key| Chef::Config[:knife][:ssh_attribute] = key }
 
       option :manual,
         :short => "-m",
@@ -70,6 +74,12 @@ class Chef
         :description => "The ssh port",
         :default => "22",
         :proc => Proc.new { |key| Chef::Config[:knife][:ssh_port] = key }
+
+      option :ssh_gateway,
+        :short => "-G GATEWAY",
+        :long => "--ssh-gateway GATEWAY",
+        :description => "The ssh gateway",
+        :proc => Proc.new { |key| Chef::Config[:knife][:ssh_gatewa] = key }
 
       option :identity_file,
         :short => "-i IDENTITY_FILE",
@@ -124,12 +134,22 @@ class Chef
       end
 
       def session_from_list(list)
+        config[:ssh_gateway] ||= Chef::Config[:knife][:ssh_gateway]
+        if config[:ssh_gateway]
+          gw_host, gw_user = config[:ssh_gateway].split('@').reverse
+          gw_host, gw_port = gw_host.split(':')
+          gw_opts = gw_port ? { :port => gw_port } : {}
+
+          session.via(gw_host, gw_user || config[:ssh_user], gw_opts)
+        end
+
         list.each do |item|
           Chef::Log.debug("Adding #{item}")
 
           hostspec = config[:ssh_user] ? "#{config[:ssh_user]}@#{item}" : item
           session_opts = {}
           session_opts[:keys] = File.expand_path(config[:identity_file]) if config[:identity_file]
+          session_opts[:keys_only] = true if config[:identity_file]
           session_opts[:password] = config[:ssh_password] if config[:ssh_password]
           session_opts[:port] = Chef::Config[:knife][:ssh_port] || config[:ssh_port]
           session_opts[:logger] = Chef::Log.logger if Chef::Log.level == :debug
@@ -162,6 +182,7 @@ class Chef
       end
 
       def ssh_command(command, subsession=nil)
+        exit_status = 0
         subsession ||= session
         command = fixup_sudo(command)
         subsession.open_channel do |ch|
@@ -174,9 +195,13 @@ class Chef
                 ichannel.send_data("#{get_password}\n")
               end
             end
+            ch.on_request "exit-status" do |ichannel, data|
+              exit_status = data.read_long
+            end
           end
         end
         session.loop
+        exit_status
       end
 
       def get_password
@@ -278,7 +303,7 @@ class Chef
           cmd = ["tmux new-session -d -s #{tmux_name}",
                  "-n '#{server.host}'", ssh_dest.call(server),
                  new_window_cmds.call].join(" ")
-          Chef::Mixin::Command.run_command(:command => cmd)
+          shell_out!(cmd)
           exec("tmux attach-session -t #{tmux_name}")
         rescue Chef::Exceptions::Exec
         end
@@ -309,28 +334,43 @@ class Chef
       end
 
       def configure_attribute
-        config[:attribute] = (config[:attribute] ||
-                              Chef::Config[:knife][:ssh_attribute] ||
+        config[:attribute] = (Chef::Config[:knife][:ssh_attribute] ||
+                              config[:attribute] ||
                               "fqdn").strip
       end
 
-      def csshx
-        csshx_cmd = "csshX"
-        session.servers_for.each do |server|
-          csshx_cmd << " #{server.user ? "#{server.user}@#{server.host}" : server.host}"
+      def cssh
+        cssh_cmd = nil
+        %w[csshX cssh].each do |cmd|
+          begin
+            # Unix and Mac only
+            cssh_cmd = shell_out!("which #{cmd}").stdout.strip
+            break
+          rescue Mixlib::ShellOut::ShellCommandFailed
+          end
         end
-        exec(csshx_cmd)
+        raise Chef::Exceptions::Exec, "no command found for cssh" unless cssh_cmd
+
+        session.servers_for.each do |server|
+          cssh_cmd << " #{server.user ? "#{server.user}@#{server.host}" : server.host}"
+        end
+        Chef::Log.debug("starting cssh session with command: #{cssh_cmd}")
+        exec(cssh_cmd)
+      end
+
+      def get_stripped_unfrozen_value(value)
+        return nil if value.nil?
+        value.strip
       end
 
       def configure_user
-        config[:ssh_user] = (config[:ssh_user] ||
+        config[:ssh_user] = get_stripped_unfrozen_value(config[:ssh_user] ||
                              Chef::Config[:knife][:ssh_user])
-        config[:ssh_user].strip! unless config[:ssh_user].nil?
       end
 
       def configure_identity_file
-        config[:identity_file] = (config[:identity_file] || Chef::Config[:knife][:ssh_identity_file])
-        config[:identity_file].strip! unless config[:identity_file].nil?
+        config[:identity_file] = get_stripped_unfrozen_value(config[:identity_file] || 
+                             Chef::Config[:knife][:ssh_identity_file])
       end
 
       def run
@@ -343,6 +383,7 @@ class Chef
         configure_identity_file
         configure_session
 
+        exit_status =
         case @name_args[1]
         when "interactive"
           interactive
@@ -352,13 +393,18 @@ class Chef
           tmux
         when "macterm"
           macterm
+        when "cssh"
+          cssh
         when "csshx"
-          csshx
+          Chef::Log.warn("knife ssh csshx will be deprecated in a future release")
+          Chef::Log.warn("please use knife ssh cssh instead")
+          cssh
         else
           ssh_command(@name_args[1..-1].join(" "))
         end
 
         session.close
+        exit_status
       end
 
     end

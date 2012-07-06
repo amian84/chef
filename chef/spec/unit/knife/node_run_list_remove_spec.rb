@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Knife::NodeRunListRemove do
   before(:each) do
@@ -54,6 +54,17 @@ describe Chef::Knife::NodeRunListRemove do
       @knife.config[:print_after] = true
       @knife.ui.should_receive(:output).with({ 'run_list' => [] })
       @knife.run
+    end
+
+    describe "run with a list of roles and recipes" do
+      it "should remove the items from the run list" do
+        @node.run_list << 'role[monkey]'
+        @node.run_list << 'recipe[duck::type]'
+        @knife.name_args = [ 'adam', 'role[monkey],recipe[duck::type]' ]
+        @knife.run
+        @node.run_list.should_not include('role[monkey]')
+        @node.run_list.should_not include('recipe[duck::type]')
+      end
     end
   end
 end

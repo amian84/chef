@@ -16,13 +16,14 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 require 'ostruct'
 
 describe Chef::Provider::Mount::Mount do
   before(:each) do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
 
     @new_resource = Chef::Resource::Mount.new("/tmp/foo")
     @new_resource.device      "/dev/sdz1"
@@ -57,6 +58,23 @@ describe Chef::Provider::Mount::Mount do
       @provider.should_receive(:popen4).with("/sbin/findfs UUID=d21afe51-a0fe-4dc6-9152-ac733763ae0a").and_yield(@pid,@stdin,@stdout_findfs,@stderr).and_return(@status)
       @provider.load_current_resource()
       @provider.mountable?
+    end
+
+    describe "when dealing with network mounts" do
+      { "nfs" => "nfsserver:/vol/path",
+        "cifs" => "//cifsserver/share" }.each do |type, fs_spec|
+        it "should detect network fs_spec (#{type})" do
+          @new_resource.device fs_spec
+          @provider.network_device?.should be_true
+        end
+
+        it "should ignore trailing slash and set mounted to true for network mount (#{type})" do
+          @new_resource.device fs_spec
+          @provider.stub!(:shell_out!).and_return(OpenStruct.new(:stdout => "#{fs_spec}/ on /tmp/foo type #{type} (rw)\n"))
+          @provider.load_current_resource
+          @provider.current_resource.mounted.should be_true
+        end
+      end
     end
 
     it "should raise an error if the mount device does not exist" do

@@ -1,6 +1,7 @@
 #
 # Author:: Seth Chisamore (<schisamo@opscode.com>)
 # Author:: Mark Mzyk (<mmzyk@opscode.com>)
+# Author:: John Keiser (<jkeiser@opscode.com>)
 # Copyright:: Copyright (c) 2011 Opscode, Inc.
 # License:: Apache License, Version 2.0
 #
@@ -20,53 +21,80 @@
 # TODO test that these work when you are logged on as a user joined to a domain (rather than local computer)
 # TODO test that you can set users from other domains
 
+require 'etc'
+
+shared_context "setup correct permissions" do
+  before :each, { :requires_root => true, :unix_only => true } do
+    File.chown(Etc.getpwnam('nobody').uid, 1337, path)
+    File.chmod(0776, path)
+  end
+  before :each, { :requires_unprivileged_user => true, :unix_only => true } do
+    File.chmod(0776, path)
+  end
+  # FIXME: windows
+end
+
+shared_context "setup broken permissions" do
+  before :each, { :requires_root => true, :unix_only => true } do
+    File.chown(0, 0, path)
+    File.chmod(0644, path)
+  end
+  before :each, { :requires_unprivileged_user => true, :unix_only => true } do
+    File.chmod(0644, path)
+  end
+  # FIXME: windows
+end
+
 shared_examples_for "a securable resource" do
-  describe "on Unix" do
-    before(:each) do
-      pending "SKIPPED - platform specific test" if windows?
-      require 'etc'
-      @expected_user_name = 'nobody'
-      @expected_group_name = 'nobody'
-      @expected_uid = Etc.getpwnam(@expected_user_name).uid
-      @expected_gid = Etc.getgrnam(@expected_group_name).gid
+  context "on Unix", :unix_only do
+    let(:expected_user_name) { 'nobody' }
+    let(:expected_uid) { Etc.getpwnam(expected_user_name).uid }
+    let(:desired_gid) { 1337 }
+    let(:expected_gid) { 1337 }
+
+    pending "should set an owner (Rerun specs under root)", :requires_unprivileged_user => true
+    pending "should set a group (Rerun specs under root)",  :requires_unprivileged_user => true
+
+    it "should set an owner", :requires_root do
+      resource.owner expected_user_name
+      resource.run_action(:create)
+      File.lstat(path).uid.should == expected_uid
     end
 
-    it "should set an owner" do
-      resource.owner @expected_user_name
+    it "should set a group", :requires_root do
+      resource.group desired_gid
       resource.run_action(:create)
-      File.stat(path).uid.should == @expected_uid
-    end
-
-    it "should set a group" do
-      resource.group @expected_group_name
-      resource.run_action(:create)
-      File.stat(path).gid.should == @expected_gid
+      File.lstat(path).gid.should == expected_gid
     end
 
     it "should set permissions in string form as an octal number" do
-      mode_string = '777'
+      mode_string = '776'
       resource.mode mode_string
       resource.run_action(:create)
-      (File.stat(path).mode & 007777).should == (mode_string.oct & 007777)
+      pending('Linux does not support lchmod', :if => resource.instance_of?(Chef::Resource::Link) && !os_x?) do
+        (File.lstat(path).mode & 007777).should == (mode_string.oct & 007777)
+      end
     end
 
     it "should set permissions in numeric form as a ruby-interpreted octal" do
-      mode_integer = 0777
+      mode_integer = 0776
       resource.mode mode_integer
       resource.run_action(:create)
-      (File.stat(path).mode & 007777).should == (mode_integer & 007777)
+      pending('Linux does not support lchmod', :if => resource.instance_of?(Chef::Resource::Link) && !os_x?) do
+        (File.lstat(path).mode & 007777).should == (mode_integer & 007777)
+      end
     end
   end
 
-  describe "on Windows" do
+  context "on Windows", :windows_only do
 
     if windows?
-      SID = Chef::Win32::Security::SID
-      ACE = Chef::Win32::Security::ACE
+      SID = Chef::ReservedNames::Win32::Security::SID
+      ACE = Chef::ReservedNames::Win32::Security::ACE
     end
 
     def get_security_descriptor(path)
-      Chef::Win32::Security.get_named_security_info(path)
+      Chef::ReservedNames::Win32::Security.get_named_security_info(path)
     end
 
     def explicit_aces
@@ -84,36 +112,36 @@ shared_examples_for "a securable resource" do
     # Standard expected rights
     let(:expected_read_perms) do
       {
-        :generic => Chef::Win32::API::Security::GENERIC_READ,
-        :specific => Chef::Win32::API::Security::FILE_GENERIC_READ,
+        :generic => Chef::ReservedNames::Win32::API::Security::GENERIC_READ,
+        :specific => Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_READ,
       }
     end
 
     let(:expected_read_execute_perms) do
       {
-        :generic => Chef::Win32::API::Security::GENERIC_READ | Chef::Win32::API::Security::GENERIC_EXECUTE,
-        :specific => Chef::Win32::API::Security::FILE_GENERIC_READ | Chef::Win32::API::Security::FILE_GENERIC_EXECUTE
+        :generic => Chef::ReservedNames::Win32::API::Security::GENERIC_READ | Chef::ReservedNames::Win32::API::Security::GENERIC_EXECUTE,
+        :specific => Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_READ | Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_EXECUTE
       }
     end
 
     let(:expected_write_perms) do
       {
-        :generic => Chef::Win32::API::Security::GENERIC_WRITE,
-        :specific => Chef::Win32::API::Security::FILE_GENERIC_WRITE
+        :generic => Chef::ReservedNames::Win32::API::Security::GENERIC_WRITE,
+        :specific => Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_WRITE
       }
     end
 
     let(:expected_modify_perms) do
       {
-        :generic => Chef::Win32::API::Security::GENERIC_READ | Chef::Win32::API::Security::GENERIC_WRITE | Chef::Win32::API::Security::GENERIC_EXECUTE | Chef::Win32::API::Security::DELETE,
-        :specific => Chef::Win32::API::Security::FILE_GENERIC_READ | Chef::Win32::API::Security::FILE_GENERIC_WRITE | Chef::Win32::API::Security::FILE_GENERIC_EXECUTE | Chef::Win32::API::Security::DELETE
+        :generic => Chef::ReservedNames::Win32::API::Security::GENERIC_READ | Chef::ReservedNames::Win32::API::Security::GENERIC_WRITE | Chef::ReservedNames::Win32::API::Security::GENERIC_EXECUTE | Chef::ReservedNames::Win32::API::Security::DELETE,
+        :specific => Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_READ | Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_WRITE | Chef::ReservedNames::Win32::API::Security::FILE_GENERIC_EXECUTE | Chef::ReservedNames::Win32::API::Security::DELETE
       }
     end
 
     let(:expected_full_control_perms) do
       {
-        :generic => Chef::Win32::API::Security::GENERIC_ALL,
-        :specific => Chef::Win32::API::Security::FILE_ALL_ACCESS
+        :generic => Chef::ReservedNames::Win32::API::Security::GENERIC_ALL,
+        :specific => Chef::ReservedNames::Win32::API::Security::FILE_ALL_ACCESS
       }
     end
 
@@ -126,16 +154,15 @@ shared_examples_for "a securable resource" do
     end
 
     def descriptor
-      get_security_descriptor(resource.path)
+      get_security_descriptor(path)
     end
 
     before(:each) do
-      pending "SKIPPED - platform specific test" unless windows?
       resource.run_action(:delete)
     end
 
     it "sets owner to Administrators on create if owner is not specified" do
-      File.exist?(resource.path).should == false
+      File.exist?(path).should == false
       resource.run_action(:create)
       descriptor.owner.should == SID.Administrators
     end
@@ -170,7 +197,7 @@ shared_examples_for "a securable resource" do
 
     it "sets group to None on create if group is not specified" do
       resource.group.should == nil
-      File.exist?(resource.path).should == false
+      File.exist?(path).should == false
       resource.run_action(:create)
       descriptor.group.should == SID.None
     end
@@ -269,16 +296,16 @@ shared_examples_for "a securable resource" do
         resource.rights(:read, 'Everyone')
         resource.run_action(:create)
 
-        explicit_aces.should == 
+        explicit_aces.should ==
           denied_acl(SID.Guest, expected_modify_perms) +
           allowed_acl(SID.Everyone, expected_read_perms)
       end
 
     end
 
-    describe "with a mode attribute" do
+    context "with a mode attribute" do
       if windows?
-        Security = Chef::Win32::API::Security
+        Security = Chef::ReservedNames::Win32::API::Security
       end
 
       it "respects mode in string form as an octal number" do
@@ -324,6 +351,26 @@ shared_examples_for "a securable resource" do
           ACE.access_allowed(SID.Administrators, Security::FILE_GENERIC_WRITE | Security::DELETE),
           ACE.access_allowed(SID.Everyone, Security::FILE_GENERIC_EXECUTE)
         ]
+      end
+
+      it 'warns when mode tries to set owner bits but owner is not specified' do
+        @warn = []
+        Chef::Log.stub!(:warn) { |msg| @warn << msg }
+
+        resource.mode 0400
+        resource.run_action(:create)
+
+        @warn.include?("Mode 400 includes bits for the owner, but owner is not specified").should be_true
+      end
+
+      it 'warns when mode tries to set group bits but group is not specified' do
+        @warn = []
+        Chef::Log.stub!(:warn) { |msg| @warn << msg }
+
+        resource.mode 0040
+        resource.run_action(:create)
+
+        @warn.include?("Mode 040 includes bits for the group, but group is not specified").should be_true
       end
     end
 

@@ -16,14 +16,15 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Log::ChefLog do
 
   before(:each) do
     @log_str = "this is my test string to log"
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
   end  
 
   it "should be registered with the default platform hash" do

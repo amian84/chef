@@ -74,6 +74,9 @@ class Chef
 
       def evaluate_command
         shell_out(@command, @command_opts).status.success?
+      rescue Chef::Exceptions::CommandTimeout
+        Chef::Log.warn "Command '#{@command}' timed out"
+        false
       end
 
       def evaluate_block
@@ -83,6 +86,14 @@ class Chef
       def description
         cmd_or_block = @command ? "command `#{@command}`" : "ruby block"
         "#{@positivity} #{cmd_or_block}"
+      end
+
+      def to_text
+        if @command
+          "#{positivity} \"#{@command}\""
+        else
+          "#{@positivity} { #code block }"
+        end
       end
 
     end

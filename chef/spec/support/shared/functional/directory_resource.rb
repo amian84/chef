@@ -60,14 +60,14 @@ shared_examples_for "a directory resource" do
   def allowed_acl(sid, expected_perms)
     [
       ACE.access_allowed(sid, expected_perms[:specific]),
-      ACE.access_allowed(sid, expected_perms[:generic], (Chef::Win32::API::Security::INHERIT_ONLY_ACE | Chef::Win32::API::Security::CONTAINER_INHERIT_ACE | Chef::Win32::API::Security::OBJECT_INHERIT_ACE))
+      ACE.access_allowed(sid, expected_perms[:generic], (Chef::ReservedNames::Win32::API::Security::INHERIT_ONLY_ACE | Chef::ReservedNames::Win32::API::Security::CONTAINER_INHERIT_ACE | Chef::ReservedNames::Win32::API::Security::OBJECT_INHERIT_ACE))
     ]
   end
 
   def denied_acl(sid, expected_perms)
     [
       ACE.access_denied(sid, expected_perms[:specific]),
-      ACE.access_denied(sid, expected_perms[:generic], (Chef::Win32::API::Security::INHERIT_ONLY_ACE | Chef::Win32::API::Security::CONTAINER_INHERIT_ACE | Chef::Win32::API::Security::OBJECT_INHERIT_ACE))
+      ACE.access_denied(sid, expected_perms[:generic], (Chef::ReservedNames::Win32::API::Security::INHERIT_ONLY_ACE | Chef::ReservedNames::Win32::API::Security::CONTAINER_INHERIT_ACE | Chef::ReservedNames::Win32::API::Security::OBJECT_INHERIT_ACE))
     ]
   end
 
@@ -76,7 +76,7 @@ end
 
 shared_context Chef::Resource::Directory do
   let(:path) do
-    File.join(Dir.tmpdir, Dir::Tmpname.make_tmpname(directory_base, nil))
+    File.join(Dir.tmpdir, make_tmpname(directory_base, nil))
   end
 
   after(:each) do

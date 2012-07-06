@@ -16,12 +16,13 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Service::Systemd do
   before(:each) do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::Service.new('rsyslog.service')
     @provider = Chef::Provider::Service::Systemd.new(@new_resource, @run_context)
   end
@@ -73,10 +74,22 @@ describe Chef::Provider::Service::Systemd do
         @provider.load_current_resource
       end
 
+      it "should run the services status command if one has been specified and properly set status check state" do
+        @provider.stub!(:run_command_with_systems_locale).with({:command => "/bin/chefhasmonkeypants status"}).and_return(0)
+        @provider.load_current_resource
+        @provider.instance_variable_get("@status_check_success").should be_true
+      end
+      
       it "should set running to false if it catches a Chef::Exceptions::Exec when using a status command" do
         @provider.stub!(:run_command_with_systems_locale).and_raise(Chef::Exceptions::Exec)
         @current_resource.should_receive(:running).with(false)
         @provider.load_current_resource
+      end
+    
+      it "should update state to indicate status check failed when an exception is thrown using a status command" do
+        @provider.stub!(:run_command_with_systems_locale).and_raise(Chef::Exceptions::Exec)
+        @provider.load_current_resource
+        @provider.instance_variable_get("@status_check_success").should be_false
       end
     end 
 
@@ -111,7 +124,7 @@ describe Chef::Provider::Service::Systemd do
 
     it "should call the start command if one is specified" do
       @new_resource.stub!(:start_command).and_return("/sbin/rsyslog startyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog startyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog startyousillysally")
       @provider.start_service
     end
 
@@ -129,7 +142,7 @@ describe Chef::Provider::Service::Systemd do
     it "should call the restart command if one is specified" do
       @current_resource.stub!(:running).and_return(true)
       @new_resource.stub!(:restart_command).and_return("/sbin/rsyslog restartyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog restartyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog restartyousillysally")
       @provider.restart_service
     end
 
@@ -142,7 +155,7 @@ describe Chef::Provider::Service::Systemd do
     it "should call the reload command if one is specified" do
       @current_resource.stub!(:running).and_return(true)
       @new_resource.stub!(:reload_command).and_return("/sbin/rsyslog reloadyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog reloadyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog reloadyousillysally")
       @provider.reload_service
     end
 
@@ -155,7 +168,7 @@ describe Chef::Provider::Service::Systemd do
     it "should call the stop command if one is specified" do
       @current_resource.stub!(:running).and_return(true)
       @new_resource.stub!(:stop_command).and_return("/sbin/rsyslog stopyousillysally")
-      @provider.should_receive(:run_command).with({:command => "/sbin/rsyslog stopyousillysally"}).and_return(0)
+      @provider.should_receive(:shell_out!).with("/sbin/rsyslog stopyousillysally")
       @provider.stop_service
     end
 

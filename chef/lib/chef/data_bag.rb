@@ -159,7 +159,7 @@ class Chef
           raise Chef::Exceptions::InvalidDataBagPath, "Data bag path '#{Chef::Config[:data_bag_path]}' is invalid"
         end
 
-        Dir.glob(File.join(Chef::Config[:data_bag_path], name, "*.json")).inject({}) do |bag, f|
+        Dir.glob(File.join(Chef::Config[:data_bag_path], "#{name}", "*.json")).inject({}) do |bag, f|
           item = JSON.parse(IO.read(f))
           bag[item['id']] = item
           bag
@@ -193,7 +193,11 @@ class Chef
     # Save the Data Bag via RESTful API
     def save
       begin
-        chef_server_rest.put_rest("data/#{@name}", self)
+        if Chef::Config[:why_run]
+          Chef::Log.warn("In whyrun mode, so NOT performing data bag save.")
+        else
+          chef_server_rest.put_rest("data/#{@name}", self)
+        end
       rescue Net::HTTPServerException => e
         raise e unless e.response.code == "404"
         chef_server_rest.post_rest("data", self)

@@ -48,6 +48,9 @@ class Chef
     end
 
     def self.platform_specific_path(path)
+      #10.times { puts "* " * 40}
+      #pp caller
+
       if RUBY_PLATFORM =~ /mswin|mingw|windows/
         # turns /etc/chef/client.rb into C:/chef/client.rb
         path = File.join(ENV['SYSTEMDRIVE'], path.split('/')[2..-1])
@@ -119,6 +122,9 @@ class Chef
     # Turn on "path sanity" by default. See also: http://wiki.opscode.com/display/chef/User+Environment+PATH+Sanity
     enforce_path_sanity(true)
 
+    # Formatted Chef Client output is a beta feature, disabled by default:
+    formatter "null"
+
     # Used when OpenID authentication is enabled in the Web UI
     authorized_openid_identifiers nil
     authorized_openid_providers nil
@@ -132,6 +138,9 @@ class Chef
     # knife, chef-client, and chef-solo.
     cookbook_path [ platform_specific_path("/var/chef/cookbooks"),
                     platform_specific_path("/var/chef/site-cookbooks") ]
+
+    # An array of paths to search for knife exec scripts if they aren't in the current directory
+    script_path []
 
     # Where files are stored temporarily during uploads
     sandbox_path "/var/chef/sandboxes"
@@ -184,6 +193,8 @@ class Chef
     run_command_stdout_timeout 120
     solo  false
     splay nil
+    why_run false
+    color false
 
     # Set these to enable SSL authentication / mutual-authentication
     # with the server
@@ -253,7 +264,7 @@ class Chef
     # Checksum Cache
     # Uses Moneta on the back-end
     cache_type "BasicFile"
-    cache_options({ :path => platform_specific_path("/etc/chef/cache/checksums"), :skip_expires => true })
+    cache_options({ :path => platform_specific_path("/var/chef/cache/checksums"), :skip_expires => true })
 
     # Arbitrary knife configuration data
     knife Hash.new
@@ -272,6 +283,7 @@ class Chef
     end
 
     # returns a platform specific path to the user home dir
-    user_home (ENV['HOME'] || ENV['SYSTEMDRIVE'] + ENV['HOMEPATH'] || ENV['USERPROFILE'])
+    windows_home_path = ENV['SYSTEMDRIVE'] + ENV['HOMEPATH'] if ENV['SYSTEMDRIVE'] && ENV['HOMEPATH']
+    user_home (ENV['HOME'] || windows_home_path || ENV['USERPROFILE'])
   end
 end

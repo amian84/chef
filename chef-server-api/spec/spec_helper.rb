@@ -49,6 +49,19 @@ def post_json(path, post_body, env = {}, &block)
   end
 end
 
+def put_json(path, put_body, env = {}, &block)
+  request_json("PUT", path, {}, env) do |controller|
+    # Merb FakeRequest allows me no way to pass JSON across the
+    # FakeRequest/StringIO boundary, so we hack it here.
+    if put_body.is_a?(Hash)
+      controller.params.merge!(put_body)
+    else
+      controller.params['inflated_object'] = put_body
+    end
+    block.call if block
+  end
+end
+
 # Make an HTTP call of <method>, assign the accept header to
 # application/json, and return the JSON-parsed output.
 #
@@ -65,12 +78,14 @@ def request_json(method, path, params, env, &block)
   @response_json = Chef::JSONCompat.from_json(@response_raw)
 end
 
-def stub_authentication(controller)
+def stub_authentication(controller,user=nil)
   username = "tester"
 
-  user = Chef::ApiClient.new
-  user.name(username)
-  user.admin(true)
+  unless user
+    user = Chef::ApiClient.new
+    user.name(username)
+    user.admin(true)
+  end
 
   # authenticate_every has a side-effect of setting @auth_user
   controller.stub!(:authenticate_every).and_return(true)

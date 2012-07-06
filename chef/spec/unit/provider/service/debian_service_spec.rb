@@ -16,13 +16,14 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Service::Debian, "load_current_resource" do
   before(:each) do
     @node = Chef::Node.new
     @node[:command] = {:ps => 'fuuuu'}
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
 
     @new_resource = Chef::Resource::Service.new("chef")
 
@@ -37,14 +38,13 @@ describe Chef::Provider::Service::Debian, "load_current_resource" do
 
   it "ensures /usr/sbin/update-rc.d is available" do
     File.should_receive(:exists?).with("/usr/sbin/update-rc.d").and_return(false)
-    lambda { @provider.assert_update_rcd_available }.should raise_error(Chef::Exceptions::Service)
+    @provider.define_resource_requirements
+    lambda { @provider.process_resource_requirements } .should raise_error(Chef::Exceptions::Service)
   end
 
   describe "when update-rc.d shows the init script linked to rc*.d/" do
     before do
-      @provider.stub!(:run_command)
       @provider.stub!(:assert_update_rcd_available)
-      @status = mock("Status", :exitstatus => 0)
 
       result=<<-UPDATE_RC_D_SUCCESS
 Removing any system startup links for /etc/init.d/chef ...
@@ -58,6 +58,8 @@ Removing any system startup links for /etc/init.d/chef ...
   UPDATE_RC_D_SUCCESS
       @stdout = StringIO.new(result)
       @stderr = StringIO.new
+      @status = mock("Status", :exitstatus => 0, :stdout => @stdout)
+      @provider.stub!(:shell_out!).and_return(@status)
       @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
     end
 
@@ -109,12 +111,12 @@ insserv: dryrun, not creating .depend.boot, .depend.start, and .depend.stop"
   }.each do |model, streams|
     describe "when update-rc.d shows the init script linked to rc*.d/" do
       before do
-        @provider.stub!(:run_command)
         @provider.stub!(:assert_update_rcd_available)
-        @status = mock("Status", :exitstatus => 0)
 
         @stdout = StringIO.new(streams["linked"]["stdout"])
         @stderr = StringIO.new(streams["linked"]["stderr"])
+        @status = mock("Status", :exitstatus => 0, :stdout => @stdout)
+        @provider.stub!(:shell_out!).and_return(@status)
         @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
       end
 
@@ -143,11 +145,11 @@ insserv: dryrun, not creating .depend.boot, .depend.start, and .depend.stop"
 
     describe "when using squeeze/earlier and update-rc.d shows the init script isn't linked to rc*.d" do
       before do
-        @provider.stub!(:run_command)
         @provider.stub!(:assert_update_rcd_available)
-        @status = mock("Status", :exitstatus => 0)
         @stdout = StringIO.new(streams["not linked"]["stdout"])
         @stderr = StringIO.new(streams["not linked"]["stderr"])
+        @status = mock("Status", :exitstatus => 0, :stdout => @stdout)
+        @provider.stub!(:shell_out!).and_return(@status)
         @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
       end
 
@@ -165,11 +167,12 @@ insserv: dryrun, not creating .depend.boot, .depend.start, and .depend.stop"
 
   describe "when update-rc.d shows the init script isn't linked to rc*.d" do
     before do
-      @provider.stub!(:run_command)
       @provider.stub!(:assert_update_rcd_available)
       @status = mock("Status", :exitstatus => 0)
       @stdout = StringIO.new(" Removing any system startup links for /etc/init.d/chef ...")
       @stderr = StringIO.new
+      @status = mock("Status", :exitstatus => 0, :stdout => @stdout)
+      @provider.stub!(:shell_out!).and_return(@status)
       @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
     end
 
@@ -191,7 +194,8 @@ insserv: dryrun, not creating .depend.boot, .depend.start, and .depend.stop"
     end
 
     it "raises an error" do
-      lambda { @provider.service_currently_enabled?(@provider.get_priority) }.should raise_error(Chef::Exceptions::Service)
+      @provider.define_resource_requirements
+      lambda { @provider.process_resource_requirements }.should raise_error(Chef::Exceptions::Service)
     end
   end
 

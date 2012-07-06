@@ -25,7 +25,10 @@ class Chef
     class Cron < Chef::Provider
       include Chef::Mixin::Command
 
-      CRON_PATTERN = /([-0-9*,\/]+)\s([-0-9*,\/]+)\s([-0-9*,\/]+)\s([-0-9*,\/]+)\s([-0-9*,\/]+)\s(.*)/
+      CRON_PATTERN = /\A([-0-9*,\/]+)\s([-0-9*,\/]+)\s([-0-9*,\/]+)\s([-0-9*,\/]+)\s([-0-9*,\/]+)\s(.*)/
+      ENV_PATTERN = /\A(\S+)=(\S*)/
+
+      CRON_ATTRIBUTES = [:minute, :hour, :day, :month, :weekday, :command, :mailto, :path, :shell, :home, :environment]
 
       def initialize(new_resource, run_context)
         super(new_resource, run_context)
@@ -34,35 +37,25 @@ class Chef
       end
       attr_accessor :cron_exists, :cron_empty
 
+      def whyrun_supported?
+        true
+      end
+      
       def load_current_resource
         crontab_lines = []
         @current_resource = Chef::Resource::Cron.new(@new_resource.name)
         @current_resource.user(@new_resource.user)
-        status = popen4("crontab -l -u #{@new_resource.user}") do |pid, stdin, stdout, stderr|
-          stdout.each_line { |line| crontab_lines << line }
-        end
-        if status.exitstatus > 1
-          raise Chef::Exceptions::Cron, "Error determining state of #{@new_resource.name}, exit: #{status.exitstatus}"
-        elsif status.exitstatus == 0
+        if crontab = read_crontab
           cron_found = false
-          crontab_lines.each do |line|
+          crontab.each_line do |line|
             case line.chomp
             when "# Chef Name: #{@new_resource.name}"
               Chef::Log.debug("Found cron '#{@new_resource.name}'")
               cron_found = true
               @cron_exists = true
               next
-            when /^MAILTO=(\S*)/
-              @current_resource.mailto($1) if cron_found
-              next
-            when /^PATH=(\S*)/
-              @current_resource.path($1) if cron_found
-              next
-            when /^SHELL=(\S*)/
-              @current_resource.shell($1) if cron_found
-              next
-            when /^HOME=(\S*)/
-              @current_resource.home($1) if cron_found
+            when ENV_PATTERN
+              set_environment_var($1, $2) if cron_found
               next
             when CRON_PATTERN
               if cron_found
@@ -76,20 +69,21 @@ class Chef
               end
               next
             else
+              cron_found=false # We've got a Chef comment with no following crontab line
               next
             end
           end
           Chef::Log.debug("Cron '#{@new_resource.name}' not found") unless @cron_exists
-        elsif status.exitstatus == 1
+        else
           Chef::Log.debug("Cron empty for '#{@new_resource.user}'")
           @cron_empty = true
         end
 
         @current_resource
       end
-
-      def compare_cron
-        [ :minute, :hour, :day, :month, :weekday, :command, :mailto, :path, :shell, :home ].any? do |cron_var|
+      
+      def cron_different?
+        CRON_ATTRIBUTES.any? do |cron_var|
           !@new_resource.send(cron_var).nil? && @new_resource.send(cron_var) != @current_resource.send(cron_var)
         end
       end
@@ -103,51 +97,55 @@ class Chef
         [ :mailto, :path, :shell, :home ].each do |v|
           newcron << "#{v.to_s.upcase}=#{@new_resource.send(v)}\n" if @new_resource.send(v)
         end
+        @new_resource.environment.each do |name, value|
+          newcron << "#{name}=#{value}\n"
+        end
         newcron << "#{@new_resource.minute} #{@new_resource.hour} #{@new_resource.day} #{@new_resource.month} #{@new_resource.weekday} #{@new_resource.command}\n"
 
         if @cron_exists
-          unless compare_cron
+          unless cron_different?
             Chef::Log.debug("Skipping existing cron entry '#{@new_resource.name}'")
             return
           end
-          status = popen4("crontab -l -u #{@new_resource.user}") do |pid, stdin, stdout, stderr|
-            stdout.each_line do |line|
-              case line.chomp
-              when "# Chef Name: #{@new_resource.name}"
-                cron_found = true
+          read_crontab.each_line do |line|
+            case line.chomp
+            when "# Chef Name: #{@new_resource.name}"
+              cron_found = true
+              next
+            when ENV_PATTERN
+              crontab << line unless cron_found
+              next
+            when CRON_PATTERN
+              if cron_found
+                cron_found = false
+                crontab << newcron
                 next
-              when CRON_PATTERN
-                if cron_found
-                  cron_found = false
-                  crontab << newcron
-                  next
-                end
-              else
-                next if cron_found
               end
-              crontab << line
+            else
+              if cron_found # We've got a Chef comment with no following crontab line
+                crontab << newcron
+                cron_found = false
+              end
             end
+            crontab << line
           end
 
-          status = popen4("crontab -u #{@new_resource.user} -", :waitlast => true) do |pid, stdin, stdout, stderr|
-            crontab.each_line { |line| stdin.puts "#{line}" }
+          # Handle edge case where the Chef comment is the last line in the current crontab
+          crontab << newcron if cron_found
+
+          converge_by("update crontab entry for #{@new_resource}") do
+            write_crontab crontab
+            Chef::Log.info("#{@new_resource} updated crontab entry")
           end
-          Chef::Log.info("#{@new_resource} updated crontab entry")
-          @new_resource.updated_by_last_action(true)
+
         else
-          unless @cron_empty
-            status = popen4("crontab -l -u #{@new_resource.user}") do |pid, stdin, stdout, stderr|
-              stdout.each { |line| crontab << line }
-            end
-          end
-
+          crontab = read_crontab unless @cron_empty
           crontab << newcron
 
-          status = popen4("crontab -u #{@new_resource.user} -", :waitlast => true) do |pid, stdin, stdout, stderr|
-            crontab.each_line { |line| stdin.puts "#{line}" }
+          converge_by("add crontab entry for #{@new_resource}") do
+            write_crontab crontab
+            Chef::Log.info("#{@new_resource} added crontab entry")
           end
-          Chef::Log.info("#{@new_resource} added crontab entry")
-          @new_resource.updated_by_last_action(true)
         end
       end
 
@@ -155,32 +153,62 @@ class Chef
         if @cron_exists
           crontab = String.new
           cron_found = false
-          status = popen4("crontab -l -u #{@new_resource.user}") do |pid, stdin, stdout, stderr|
-            stdout.each_line do |line|
-              case line.chomp
-              when "# Chef Name: #{@new_resource.name}"
-                cron_found = true
+          read_crontab.each_line do |line|
+            case line.chomp
+            when "# Chef Name: #{@new_resource.name}"
+              cron_found = true
+              next
+            when ENV_PATTERN
+              next if cron_found
+            when CRON_PATTERN
+              if cron_found
+                cron_found = false
                 next
-              when CRON_PATTERN
-                if cron_found
-                  cron_found = false
-                  next
-                end
-              else
-                next if cron_found
               end
-              crontab << line
+            else
+              # We've got a Chef comment with no following crontab line
+              cron_found = false
             end
+            crontab << line
           end
-
-          status = popen4("crontab -u #{@new_resource.user} -", :waitlast => true) do |pid, stdin, stdout, stderr|
-            crontab.each_line { |line| stdin.puts "#{line}" }
+          description = cron_found ? "remove #{@new_resource.name} from crontab" : 
+            "save unmodified crontab"
+          converge_by(description) do
+            write_crontab crontab
+            Chef::Log.info("#{@new_resource} deleted crontab entry")
           end
-          Chef::Log.info("#{@new_resource} deleted crontab entry")
-          @new_resource.updated_by_last_action(true)
         end
       end
 
+      private
+
+      def set_environment_var(attr_name, attr_value)
+        if %w(MAILTO PATH SHELL HOME).include?(attr_name)
+          @current_resource.send(attr_name.downcase.to_sym, attr_value)
+        else
+          @current_resource.environment(@current_resource.environment.merge(attr_name => attr_value))
+        end
+      end
+
+      def read_crontab
+        crontab = nil
+        status = popen4("crontab -l -u #{@new_resource.user}") do |pid, stdin, stdout, stderr|
+          crontab = stdout.read
+        end
+        if status.exitstatus > 1
+          raise Chef::Exceptions::Cron, "Error determining state of #{@new_resource.name}, exit: #{status.exitstatus}"
+        end
+        crontab
+      end
+
+      def write_crontab(crontab)
+        status = popen4("crontab -u #{@new_resource.user} -", :waitlast => true) do |pid, stdin, stdout, stderr|
+          stdin.write crontab
+        end
+        if status.exitstatus > 0
+          raise Chef::Exceptions::Cron, "Error updating state of #{@new_resource.name}, exit: #{status.exitstatus}"
+        end
+      end
     end
   end
 end

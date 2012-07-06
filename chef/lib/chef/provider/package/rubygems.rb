@@ -65,6 +65,17 @@ class Chef
             raise NotImplementedError
           end
 
+          ## 
+          # A rubygems specification object containing the list of gemspecs for all
+          # available gems in the gem installation.
+          # Implemented by subclasses
+          # For rubygems >= 1.8.0
+          # === Returns
+          # Gem::Specification
+          def gem_specification
+            raise NotImplementedError
+          end
+
           ##
           # Lists the installed versions of +gem_name+, constrained by the
           # version spec in +gem_dep+
@@ -74,7 +85,11 @@ class Chef
           # === Returns
           # [Gem::Specification]  an array of Gem::Specification objects
           def installed_versions(gem_dep)
-            gem_source_index.search(gem_dep)
+            if Gem::Version.new(Gem::VERSION) >= Gem::Version.new('1.8.0')
+              gem_specification.find_all_by_name(gem_dep.name, gem_dep.requirement)
+            else
+              gem_source_index.search(gem_dep)
+            end
           end
 
           ##
@@ -203,6 +218,10 @@ class Chef
             Gem.source_index
           end
 
+          def gem_specification
+            Gem::Specification
+          end
+
           def candidate_version_from_remote(gem_dependency, *sources)
             with_gem_sources(*sources) do
               find_newest_remote_version(gem_dependency, *sources)
@@ -244,6 +263,15 @@ class Chef
 
           def gem_source_index
             @source_index ||= Gem::SourceIndex.from_gems_in(*gem_paths.map { |p| p + '/specifications' })
+          end
+
+          def gem_specification
+            # Only once, dirs calls a reset
+            unless @specification
+              Gem::Specification.dirs = gem_paths
+              @specification = Gem::Specification
+            end
+            @specification
           end
 
           ##
@@ -295,6 +323,7 @@ class Chef
         include Chef::Mixin::ShellOut
 
         attr_reader :gem_env
+        attr_reader :cleanup_gem_env
 
         def logger
           Chef::Log.logger
@@ -304,6 +333,7 @@ class Chef
 
         def initialize(new_resource, run_context=nil)
           super
+          @cleanup_gem_env = true
           if new_resource.gem_binary
             if new_resource.options && new_resource.options.kind_of?(Hash)
               msg =  "options cannot be given as a hash when using an explicit gem_binary\n"
@@ -316,16 +346,18 @@ class Chef
             # Opscode Omnibus - The ruby that ships inside omnibus is only used for Chef
             # Default to installing somewhere more functional
             gem_location = find_gem_by_path
+            @new_resource.gem_binary gem_location
             @gem_env = AlternateGemEnvironment.new(gem_location)
             Chef::Log.debug("#{@new_resource} using gem '#{gem_location}'")
           else
             @gem_env = CurrentGemEnvironment.new
+            @cleanup_gem_env = false
             Chef::Log.debug("#{@new_resource} using gem from running ruby environment")
           end
         end
 
         def is_omnibus?
-          if RbConfig::CONFIG['bindir'] == "/opt/opscode/embedded/bin"
+          if RbConfig::CONFIG['bindir'] =~ %r!/opt/(opscode|chef)/embedded/bin!
             Chef::Log.debug("#{@new_resource} detected omnibus installation in #{RbConfig::CONFIG['bindir']}")
             # Omnibus installs to a static path because of linking on unix, find it.
             true
@@ -401,6 +433,13 @@ class Chef
           @current_resource
         end
 
+        def cleanup_after_converge
+          if @cleanup_gem_env
+            logger.debug { "#{@new_resource} resetting gem environment to default" }
+            Gem.clear_paths
+          end
+        end
+
         def candidate_version
           @candidate_version ||= begin
             if target_version_already_installed?
@@ -416,9 +455,7 @@ class Chef
         def target_version_already_installed?
           return false unless @current_resource && @current_resource.version
           return false if @current_resource.version.nil?
-          # in the future we could support squiggly requirements like "~> 1.2.0"
-          # for now, the behavior when using anything other than exact
-          # requirements is undefined.
+
           Gem::Requirement.new(@new_resource.version).satisfied_by?(Gem::Version.new(@current_resource.version))
         end
 
@@ -452,7 +489,11 @@ class Chef
         end
 
         def install_via_gem_command(name, version)
-          src = @new_resource.source && "  --source=#{@new_resource.source} --source=http://rubygems.org"
+          if @new_resource.source =~ /\.gem$/i
+            name = @new_resource.source
+          else
+            src = @new_resource.source && "  --source=#{@new_resource.source} --source=http://rubygems.org"
+          end
           if version
             shell_out!("#{gem_binary_path} install #{name} -q --no-rdoc --no-ri -v \"#{version}\"#{src}#{opts}", :env=>nil)
           else

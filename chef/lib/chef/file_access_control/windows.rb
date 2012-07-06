@@ -22,17 +22,36 @@ require 'chef/win32/security'
 class Chef
   class FileAccessControl
     module Windows
-      include Chef::Win32::API::Security
+      include Chef::ReservedNames::Win32::API::Security
 
-      Security = Chef::Win32::Security
+      Security = Chef::ReservedNames::Win32::Security
       ACL = Security::ACL
       ACE = Security::ACE
       SID = Security::SID
+
+      def set_all!
+        set_owner!
+        set_group!
+        set_dacl
+      end
 
       def set_all
         set_owner
         set_group
         set_dacl
+      end
+
+      def requires_changes?
+        should_update_dacl? || should_update_owner? || should_update_group?
+      end
+
+      def describe_changes
+        # FIXME: describe what these are changing from and to
+        changes = []
+        changes << "change dacl" if should_update_dacl?
+        changes << "change owner" if should_update_owner?
+        changes << "change group" if should_update_group?
+        changes
       end
 
       private
@@ -83,11 +102,23 @@ class Chef
       def securable_object
         @securable_object ||= begin
           if file.kind_of?(String)
-            so = Chef::Win32::Security::SecurableObject.new(file.dup)
+            so = Chef::ReservedNames::Win32::Security::SecurableObject.new(file.dup)
           end
-          raise ArgumentError, "'file' must be a valid path or object of type 'Chef::Win32::Security::SecurableObject'" unless so.kind_of? Chef::Win32::Security::SecurableObject
+          raise ArgumentError, "'file' must be a valid path or object of type 'Chef::ReservedNames::Win32::Security::SecurableObject'" unless so.kind_of? Chef::ReservedNames::Win32::Security::SecurableObject
           so
         end
+      end
+
+      def should_update_dacl?
+        return true unless ::File.exists?(file)
+        dacl = target_dacl
+        existing_dacl = existing_descriptor.dacl
+        inherits = target_inherits
+        ( ! inherits.nil? && inherits != existing_descriptor.dacl_inherits? ) || ( dacl && !acls_equal(dacl, existing_dacl) )
+      end
+
+      def set_dacl!
+        set_dacl
       end
 
       def set_dacl
@@ -111,19 +142,41 @@ class Chef
         end
       end
 
-      def set_group
-        if (group = target_group) && (group != existing_descriptor.group)
+      def should_update_group?
+        return true unless ::File.exists?(file)
+        (group = target_group) && (group != existing_descriptor.group)
+      end
+
+      def set_group!
+        if (group = target_group)
           Chef::Log.info("#{log_string} group changed to #{group}")
           securable_object.group = group
           modified
         end
       end
 
-      def set_owner
-        if (owner = target_owner) && (owner != existing_descriptor.owner)
+      def set_group
+        if (group = target_group) && (group != existing_descriptor.group)
+          set_group!
+        end
+      end
+
+      def should_update_owner?
+        return true unless ::File.exists?(file)
+        (owner = target_owner) && (owner != existing_descriptor.owner)
+      end
+
+      def set_owner!
+        if owner = target_owner
           Chef::Log.info("#{log_string} owner changed to #{owner}")
           securable_object.owner = owner
           modified
+        end
+      end
+
+      def set_owner
+        if (owner = target_owner) && (owner != existing_descriptor.owner)
+          set_owner!
         end
       end
 
@@ -223,20 +276,20 @@ class Chef
           if owner
             acls += mode_ace(owner, (mode & 0700) >> 6)
           elsif mode & 0700 != 0
-            raise "Mode #{mode.to_s(8)} includes bits for the owner, but owner is not specified"
+            Chef::Log.warn("Mode #{sprintf("%03o", mode)} includes bits for the owner, but owner is not specified")
           end
 
           group = target_group
           if group
             acls += mode_ace(group, (mode & 070) >> 3)
           elsif mode & 070 != 0
-            raise "Mode #{mode.to_s(8)} includes bits for the group, but group is not specified"
+            Chef::Log.warn("Mode #{sprintf("%03o", mode)} includes bits for the group, but group is not specified")
           end
 
           acls += mode_ace(SID.Everyone, (mode & 07))
         end
 
-        acls.nil? ? nil : Chef::Win32::Security::ACL.create(acls)
+        acls.nil? ? nil : Chef::ReservedNames::Win32::Security::ACL.create(acls)
       end
 
       def target_group

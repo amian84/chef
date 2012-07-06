@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
+require 'spec_helper'
 
 describe Chef::RunList::RunListItem do
 
@@ -68,6 +68,18 @@ describe Chef::RunList::RunListItem do
       item.should_not be_a_role
       item.to_s.should == 'recipe[lobster]'
       item.name.should == 'lobster'
+    end
+
+    it "raises an exception when the string has typo on the type part" do
+      lambda {Chef::RunList::RunListItem.new("Recipe[lobster]") }.should raise_error(ArgumentError)
+    end
+
+    it "raises an exception when the string has extra space between the type and the name" do
+      lambda {Chef::RunList::RunListItem.new("recipe [lobster]") }.should raise_error(ArgumentError)
+    end
+
+    it "raises an exception when the string does not close the bracket" do
+      lambda {Chef::RunList::RunListItem.new("recipe[lobster") }.should raise_error(ArgumentError)
     end
   end
 

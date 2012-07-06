@@ -16,13 +16,13 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../../spec_helper')
-
+require 'spec_helper'
 require 'tiny_server'
 
 describe Chef::Knife::Ssh do
 
   before(:all) do
+    Chef::Knife::Ssh.load_deps
     Thin::Logging.silent = true
     @server = TinyServer::Manager.new
     @server.start
@@ -37,6 +37,18 @@ describe Chef::Knife::Ssh do
       before do
         setup_knife(['*:*', 'uptime'])
         Chef::Config[:knife][:ssh_identity_file] = "~/.ssh/aws.rsa"
+      end
+
+      it "uses the ssh_identity_file" do
+        @knife.run
+        @knife.config[:identity_file].should == "~/.ssh/aws.rsa"
+      end
+    end
+
+    context "when knife[:ssh_identity_file] is set and frozen" do
+      before do
+        setup_knife(['*:*', 'uptime'])
+        Chef::Config[:knife][:ssh_identity_file] = "~/.ssh/aws.rsa".freeze
       end
 
       it "uses the ssh_identity_file" do
@@ -89,6 +101,18 @@ describe Chef::Knife::Ssh do
       end
     end
 
+    context "when knife[:ssh_user] is set and frozen" do
+      before do
+        setup_knife(['*:*', 'uptime'])
+        Chef::Config[:knife][:ssh_user] = "ubuntu".freeze
+      end
+
+      it "uses the ssh_user" do
+        @knife.run
+        @knife.config[:ssh_user].should == "ubuntu"
+      end
+    end
+
     context "when -x is provided" do
       before do
         setup_knife(['-x ubuntu', '*:*', 'uptime'])
@@ -133,7 +157,7 @@ describe Chef::Knife::Ssh do
       end
     end
 
-    context "when knife[:ssh_attribte] is not provided]" do
+    context "when knife[:ssh_attribute] is not provided]" do
       before do
         setup_knife(['*:*', 'uptime'])
         Chef::Config[:knife][:ssh_attribute] = nil
@@ -157,7 +181,10 @@ describe Chef::Knife::Ssh do
       end
 
       it "should override what is set in knife.rb" do
+        # This is the setting imported from knife.rb
         Chef::Config[:knife][:ssh_attribute] = "fqdn"
+        # Then we run knife with the -a flag, which sets the above variable
+        setup_knife(['-a ec2.public_hostname', '*:*', 'uptime'])
         @knife.run
         @knife.config[:attribute].should == "ec2.public_hostname"
       end

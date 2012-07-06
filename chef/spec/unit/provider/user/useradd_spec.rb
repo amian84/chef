@@ -18,12 +18,13 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::User::Useradd do
   before(:each) do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
 
     @new_resource = Chef::Resource::User.new("adam", @run_context)
     @new_resource.comment "Adam Jacob"
@@ -158,14 +159,34 @@ describe Chef::Provider::User::Useradd do
 
   describe "when creating a user" do
     before(:each) do
+      @current_resource = Chef::Resource::User.new(@new_resource.name, @run_context)
+      @current_resource.username(@new_resource.username)
+      @provider.current_resource = @current_resource
       @provider.new_resource.manage_home true
       @provider.new_resource.home "/Users/mud"
       @provider.new_resource.gid '23'
     end
 
     it "runs useradd with the computed command options" do
-      @provider.should_receive(:run_command).with({ :command => "useradd -g '23' -d '/Users/mud' -m adam" }).and_return(true)
+      command = "useradd -c 'Adam Jacob' -g '23' -p 'abracadabra' -s '/usr/bin/zsh' -u '1000' -d '/Users/mud' -m adam"
+      @provider.should_receive(:run_command).with({ :command => command }).and_return(true)
       @provider.create_user
+    end
+
+    describe "and home is not specified for new system user resource" do
+
+      before do
+        @provider.new_resource.system true
+        # there is no public API to set attribute's value to nil 
+        @provider.new_resource.instance_variable_set("@home", nil)
+      end
+
+      it "should not include -d in the command options" do
+        command = "useradd -c 'Adam Jacob' -g '23' -p 'abracadabra' -s '/usr/bin/zsh' -u '1000' -r adam"
+        @provider.should_receive(:run_command).with({ :command => command }).and_return(true)
+        @provider.create_user
+      end
+
     end
 
   end
@@ -301,6 +322,59 @@ describe Chef::Provider::User::Useradd do
     it "should run usermod -L with the new resources username" do
       @provider.should_receive(:run_command).with({ :command => "usermod -U #{@new_resource.username}"})
       @provider.unlock_user
+    end
+  end
+
+  describe "when checking if home needs updating" do
+    [
+     {
+       "action" => "should return false if home matches",
+       "current_resource_home" => [ "/home/laurent" ],
+       "new_resource_home" => [ "/home/laurent" ],
+       "expected_result" => false
+     },
+     {
+       "action" => "should return true if home doesn't match",
+       "current_resource_home" => [ "/home/laurent" ],
+       "new_resource_home" => [ "/something/else" ],
+       "expected_result" => true
+     },
+     {
+       "action" => "should return false if home only differs by trailing slash",
+       "current_resource_home" => [ "/home/laurent" ],
+       "new_resource_home" => [ "/home/laurent/", "/home/laurent" ],
+       "expected_result" => false
+     },
+     {
+       "action" => "should return false if home is an equivalent path",
+       "current_resource_home" => [ "/home/laurent" ],
+       "new_resource_home" => [ "/home/./laurent", "/home/laurent" ],
+       "expected_result" => false
+     },
+    ].each do |home_check|
+      it home_check["action"] do
+        @provider.current_resource.home home_check["current_resource_home"].first
+        @current_home_mock = mock("Pathname")
+        @provider.new_resource.home home_check["new_resource_home"].first
+        @new_home_mock = mock("Pathname")
+
+        Pathname.should_receive(:new).with(@current_resource.home).and_return(@current_home_mock)
+        @current_home_mock.should_receive(:cleanpath).and_return(home_check["current_resource_home"].last)
+        Pathname.should_receive(:new).with(@new_resource.home).and_return(@new_home_mock)
+        @new_home_mock.should_receive(:cleanpath).and_return(home_check["new_resource_home"].last)
+
+        @provider.updating_home?.should == home_check["expected_result"]
+      end
+    end
+    it "should return true if the current home does not exist but a home is specified by the new resource" do
+      @new_resource = Chef::Resource::User.new("adam", @run_context)
+      @current_resource = Chef::Resource::User.new("adam", @run_context)
+      @provider = Chef::Provider::User::Useradd.new(@new_resource, @run_context)
+      @provider.current_resource = @current_resource
+      @current_resource.home nil
+      @new_resource.home "/home/kitten"
+
+      @provider.updating_home?.should == true
     end
   end
 end

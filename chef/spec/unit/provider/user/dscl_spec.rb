@@ -18,13 +18,14 @@
 
 ShellCmdResult = Struct.new(:stdout, :stderr, :exitstatus)
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 require 'ostruct'
 
 describe Chef::Provider::User::Dscl do
   before do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::User.new("toor")
     @provider = Chef::Provider::User::Dscl.new(@new_resource, @run_context)
   end

@@ -11,7 +11,7 @@ exists() {
 }
 
 install_sh="http://opscode.com/chef/install.sh"
-version_string="<%= "-v #{knife_config[:bootstrap_version]}" if knife_config[:bootstrap_version] %>"
+version_string="-v <%= chef_version %>"
 
 if ! exists /usr/bin/chef-client; then
   if exists wget; then
@@ -44,6 +44,19 @@ awk NF /tmp/encrypted_data_bag_secret > /etc/chef/encrypted_data_bag_secret
 rm /tmp/encrypted_data_bag_secret
 <% end -%>
 
+<%# Generate Ohai Hints -%>
+<% unless @chef_config[:knife][:hints].nil? || @chef_config[:knife][:hints].empty? -%>
+mkdir -p /etc/chef/ohai/hints
+<% end -%>
+
+<% @chef_config[:knife][:hints].each do |name, hash| -%>
+(
+cat <<'EOP'
+<%= hash.to_json %>
+EOP
+) > /etc/chef/ohai/hints/<%= name %>.json
+<% end -%>
+
 (
 cat <<'EOP'
 <%= config_content %>
@@ -52,7 +65,7 @@ EOP
 
 (
 cat <<'EOP'
-<%= { "run_list" => @run_list }.to_json %>
+<%= first_boot.to_json %>
 EOP
 ) > /etc/chef/first-boot.json
 

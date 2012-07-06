@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::RemoteFile do
   include_context Chef::Resource::File
@@ -26,7 +26,10 @@ describe Chef::Resource::RemoteFile do
   let(:expected_content) { IO.read(File.join(CHEF_SPEC_DATA, 'remote_file', 'nyan_cat.png')) }
 
   def create_resource
-    resource = Chef::Resource::RemoteFile.new(path)
+    node = Chef::Node.new
+    events = Chef::EventDispatch::Dispatcher.new
+    run_context = Chef::RunContext.new(node, {}, events)
+    resource = Chef::Resource::RemoteFile.new(path, run_context)
     resource.source(source)
     resource
   end

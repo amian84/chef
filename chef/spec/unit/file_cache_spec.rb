@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::FileCache do
   before do
@@ -36,7 +36,7 @@ describe Chef::FileCache do
     end
 
     it "creates the cached file at the correct relative path" do
-      File.should_receive(:open).with(File.join(@file_cache_path, 'whiz', 'bang'), "w").and_yield(@io)
+      File.should_receive(:open).with(File.join(@file_cache_path, 'whiz', 'bang'), "w",416).and_yield(@io)
       Chef::FileCache.store("whiz/bang", "borkborkbork")
     end
 

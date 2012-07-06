@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 require 'chef/data_bag_item'
 
 describe Chef::DataBagItem do
@@ -191,6 +191,44 @@ describe Chef::DataBagItem do
 
       @data_bag_item.inspect.should == "data_bag_item[\"books\", \"heart_of_darkness\", #{raw_data.inspect}]"
     end
+  end
+
+  describe "save" do
+    before do
+      @rest = mock("Chef::REST")
+      Chef::REST.stub!(:new).and_return(@rest)
+      @data_bag_item['id'] = "heart of darkness" 
+      raw_data = {"id" => "heart_of_darkness", "author" => "Conrad"}
+      @data_bag_item.raw_data = raw_data
+      @data_bag_item.data_bag("books")
+    end
+    it "should update the item when it already exists" do
+      @rest.should_receive(:put_rest).with("data/books/heart_of_darkness", @data_bag_item)
+      @data_bag_item.save
+    end
+
+    it "should create if the item is not found" do 
+      exception = mock("404 error", :code => "404")
+      @rest.should_receive(:put_rest).and_raise(Net::HTTPServerException.new("foo", exception))
+      @rest.should_receive(:post_rest).with("data/books", @data_bag_item)
+      @data_bag_item.save
+    end
+    describe "when whyrun mode is enabled" do
+      before do
+        Chef::Config[:why_run] = true
+      end
+      after do
+        Chef::Config[:why_run] = false
+      end
+      it "should not save" do
+        @rest.should_not_receive(:put_rest)
+        @rest.should_not_receive(:post_rest)
+        @data_bag_item.data_bag("books")
+        @data_bag_item.save
+      end
+    end
+
+    
   end
 
   describe "when loading" do

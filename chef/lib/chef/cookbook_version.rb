@@ -20,7 +20,6 @@
 # limitations under the License.
 
 require 'chef/log'
-require 'chef/client'
 require 'chef/node'
 require 'chef/resource_definition_list'
 require 'chef/recipe'
@@ -103,6 +102,7 @@ class Chef
       legit_version <=> o.legit_version
     end
   end
+
 
   # == Chef::CookbookVersion
   # CookbookVersion is a model object encapsulating the data about a Chef
@@ -284,26 +284,8 @@ class Chef
       nil
     end
 
-    # Keep track of the filenames that we use in both eager cookbook
-    # downloading (during sync_cookbooks) and lazy (during the run
-    # itself, through FileVendor). After the run is over, clean up the
-    # cache.
-    def self.valid_cache_entries
-      @valid_cache_entries ||= {}
-    end
-
-    def self.reset_cache_validity
-      @valid_cache_entries = nil
-    end
-
     def self.cache
       Chef::FileCache
-    end
-
-    # Setup a notification to clear the valid_cache_entries when a Chef client
-    # run starts
-    Chef::Client.when_run_starts do |run_status|
-      reset_cache_validity
     end
 
     # Synchronizes all the cookbooks from the chef-server.
@@ -351,8 +333,11 @@ class Chef
 
       # files and templates are lazily loaded, and will be done later.
       eager_segments = COOKBOOK_SEGMENTS.dup
-      eager_segments.delete(:files)
-      eager_segments.delete(:templates)
+
+      unless Chef::Config[:no_lazy_load] then
+        eager_segments.delete(:files)
+        eager_segments.delete(:templates)
+      end
 
       eager_segments.each do |segment|
         segment_filenames = Array.new
@@ -410,11 +395,6 @@ class Chef
           end
         end
       end
-    end
-
-    # Register a notification to cleanup unused files from cookbooks
-    Chef::Client.when_run_completes_successfully do |run_status|
-      cleanup_file_cache
     end
 
     # Creates a new Chef::CookbookVersion object.

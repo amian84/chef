@@ -23,7 +23,7 @@ require 'open3'
 module Chef
   module Expander
 
-    VERSION = "0.10.9"
+    VERSION = "10.13.0"
 
     def self.version
       @rev ||= begin

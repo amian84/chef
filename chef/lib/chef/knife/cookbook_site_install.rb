@@ -17,6 +17,7 @@
 #
 
 require 'chef/knife'
+require 'shellwords'
 
 class Chef
   class Knife
@@ -51,6 +52,13 @@ class Chef
         :description => "Default branch to work with",
         :default => "master"
 
+      option :use_current_branch,
+        :short =>  "-b",
+        :long => "--use-current-branch",
+        :description => "Use the current branch",
+        :boolean => true,
+        :default => false
+
       attr_reader :cookbook_name
       attr_reader :vendor_path
 
@@ -66,7 +74,7 @@ class Chef
         @cookbook_name = parse_name_args!
         # Check to ensure we have a valid source of cookbooks before continuing
         #
-        @install_path = config[:cookbook_path].first
+        @install_path = File.expand_path(config[:cookbook_path].first)
         ui.info "Installing #@cookbook_name to #{@install_path}"
 
         @repo = CookbookSCMRepo.new(@install_path, ui, config)
@@ -74,12 +82,14 @@ class Chef
         upstream_file = File.join(@install_path, "#{@cookbook_name}.tar.gz")
 
         @repo.sanity_check
-        @repo.reset_to_default_state
-        @repo.prepare_to_import(@cookbook_name)
+        unless config[:use_current_branch]
+          @repo.reset_to_default_state
+          @repo.prepare_to_import(@cookbook_name)
+        end
 
         downloader = download_cookbook_to(upstream_file)
         clear_existing_files(File.join(@install_path, @cookbook_name))
-        extract_cookbook(upstream_file, @install_path)
+        extract_cookbook(upstream_file, downloader.version)
 
         # TODO: it'd be better to store these outside the cookbook repo and
         # keep them around, e.g., in ~/Library/Caches on OS X.
@@ -87,12 +97,15 @@ class Chef
         File.unlink(upstream_file)
 
         if @repo.finalize_updates_to(@cookbook_name, downloader.version)
-          @repo.reset_to_default_state
+          unless config[:use_current_branch]
+            @repo.reset_to_default_state
+          end
           @repo.merge_updates_from(@cookbook_name, downloader.version)
         else
-          @repo.reset_to_default_state
+          unless config[:use_current_branch]
+            @repo.reset_to_default_state
+          end
         end
-
 
         unless config[:no_deps]
           md = Chef::Cookbook::Metadata.new
@@ -109,14 +122,15 @@ class Chef
 
       def parse_name_args!
         if name_args.empty?
-          ui.error("please specify a cookbook to download and install")
+          ui.error("Please specify a cookbook to download and install.")
           exit 1
-        elsif name_args.size > 1
-          ui.error("Installing multiple cookbooks at once is not supported")
-          exit 1
-        else
-          name_args.first
+        elsif name_args.size >= 2
+          unless name_args.last.match(/^(\d+)(\.\d+){1,2}$/) and name_args.size == 2
+            ui.error("Installing multiple cookbooks at once is not supported.")
+            exit 1
+          end
         end
+        name_args.first
       end
 
       def download_cookbook_to(download_path)
@@ -129,7 +143,7 @@ class Chef
 
       def extract_cookbook(upstream_file, version)
         ui.info("Uncompressing #{@cookbook_name} version #{version}.")
-        shell_out!("tar zxvf #{upstream_file}", :cwd => @install_path)
+        shell_out!("tar zxvf #{Shellwords.escape upstream_file}", :cwd => @install_path)
       end
 
       def clear_existing_files(cookbook_path)
@@ -139,9 +153,3 @@ class Chef
     end
   end
 end
-
-
-
-
-
-

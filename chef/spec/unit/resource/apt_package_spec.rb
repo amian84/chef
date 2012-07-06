@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::AptPackage, "initialize" do
   
@@ -34,5 +34,10 @@ describe Chef::Resource::AptPackage, "initialize" do
   
   it "should set the provider to Chef::Provider::Package::Apt" do
     @resource.provider.should eql(Chef::Provider::Package::Apt)
+  end
+
+  it "should support default_release" do
+    @resource.default_release("lenny-backports")
+    @resource.default_release.should eql("lenny-backports")
   end
 end

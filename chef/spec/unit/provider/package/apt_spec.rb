@@ -16,14 +16,15 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 require 'ostruct'
 
 describe Chef::Provider::Package::Apt do
   before(:each) do
     @node = Chef::Node.new
     @node.cookbook_collection = {}
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::Package.new("irssi", @run_context)
     @current_resource = Chef::Resource::Package.new("irssi", @run_context)
 
@@ -179,6 +180,17 @@ SHOWPKG_STDOUT
       @provider.should_receive(:shell_out!).with("apt-cache showpkg mp3-decoder").and_return(showpkg)
       lambda { @provider.load_current_resource }.should raise_error(Chef::Exceptions::Package)
     end
+
+    it "should run apt-cache policy with the default_release option, if there is one and provider is explicitly defined" do
+      @new_resource = Chef::Resource::AptPackage.new("irssi", @run_context)
+      @provider = Chef::Provider::Package::Apt.new(@new_resource, @run_context)
+
+      @new_resource.stub!(:default_release).and_return("lenny-backports")
+      @new_resource.stub!(:provider).and_return("Chef::Provider::Package::Apt")
+      @provider.should_receive(:shell_out!).with("apt-cache -o APT::Default-Release=lenny-backports policy irssi").and_return(@shell_out)
+      @provider.load_current_resource
+    end
+
   end
 
   describe "install_package" do
@@ -271,7 +283,8 @@ SHOWPKG_STDOUT
 
     it "should get the full path to the preseed response file" do
       @provider.should_receive(:get_preseed_file).with("irssi", "0.8.12-7").and_return("/tmp/irssi-0.8.12-7.seed")
-      @provider.preseed_package("irssi", "0.8.12-7")
+      file = @provider.get_preseed_file("irssi", "0.8.12-7")
+      @provider.preseed_package(file)
     end
 
     it "should run debconf-set-selections on the preseed file if it has changed" do
@@ -281,13 +294,17 @@ SHOWPKG_STDOUT
           "DEBIAN_FRONTEND" => "noninteractive"
         }
       }).and_return(true)
-      @provider.preseed_package("irssi", "0.8.12-7")
+      file = @provider.get_preseed_file("irssi", "0.8.12-7")
+      @provider.preseed_package(file)
     end
 
     it "should not run debconf-set-selections if the preseed file has not changed" do
+      @provider.stub(:check_package_state)
+      @current_resource.version "0.8.11"
+      @new_resource.response_file "/tmp/file"
       @provider.stub!(:get_preseed_file).and_return(false)
       @provider.should_not_receive(:run_command_with_systems_locale)
-      @provider.preseed_package("irssi", "0.8.12-7")
+      @provider.run_action(:reconfig)
     end
   end
 

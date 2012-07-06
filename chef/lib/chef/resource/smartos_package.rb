@@ -1,14 +1,14 @@
 #
-# Author:: Seth Chisamore (<schisamo@opscode.com>)
-# Copyright:: Copyright (c) 2011 Opscode, Inc.
+# Author:: Toomas Pelberg (<toomasp@gmx.net>)
+# Copyright:: Copyright (c) 2010 Opscode, Inc.
 # License:: Apache License, Version 2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-#
+# 
 #     http://www.apache.org/licenses/LICENSE-2.0
-#
+# 
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,31 +16,21 @@
 # limitations under the License.
 #
 
-require 'chef/win32/process'
+require 'chef/resource/package'
+require 'chef/provider/package/smartos'
 
-module RSpec
-  module Prof
-    module Win32
-      class Profiler
-
-        def start
-          GC.start
-        end
-
-        def stop
-          GC.start
-        end
-
-        def working_set_size
-          Chef::Win32::Process.get_current_process.memory_info[:WorkingSetSize]
-        end
-
-        def handle_count
-          Chef::Win32::Process.get_current_process.handle_count
-        end
+class Chef
+  class Resource
+    class SmartOSPackage < Chef::Resource::Package
+        
+      def initialize(name, run_context=nil)
+        super
+        @resource_name = :smartos_package
+        @provider = Chef::Provider::Package::SmartOS
       end
-
+      
     end
   end
 end
+
 

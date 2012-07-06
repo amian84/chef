@@ -18,7 +18,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 
 Chef::Log.level = :debug
 
@@ -29,7 +29,8 @@ describe Chef::RunContext do
     @cookbook_collection = Chef::CookbookCollection.new(Chef::CookbookLoader.new(@chef_repo_path))
     @node = Chef::Node.new
     @node.find_file("run_context")
-    @run_context = Chef::RunContext.new(@node, @cookbook_collection)
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, @cookbook_collection, @events)
   end
 
   it "has a cookbook collection" do

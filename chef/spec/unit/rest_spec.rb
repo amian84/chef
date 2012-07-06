@@ -19,7 +19,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 require 'uri'
 require 'net/https'
 require 'stringio'
@@ -201,21 +201,43 @@ describe Chef::REST do
         @rest.run_request(:GET, @url, {}).should == "ohai2u_success"
       end
 
-      it "should call run_request again on a Redirect response" do
-        http_response = Net::HTTPFound.new("1.1", "302", "bob is taking care of that one for me today")
-        http_response.add_field("location", @url.path)
-        http_response.stub!(:read_body)
-
+      it "should return false on a Not Modified response" do
+        http_response = Net::HTTPNotModified.new("1.1", "304", "It's old Bob")
         @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
-        lambda { @rest.run_request(:GET, @url) }.should raise_error(Chef::Exceptions::RedirectLimitExceeded)
+        http_response.stub!(:read_body)
+        @rest.run_request(:GET, @url).should be_false
       end
 
-      it "should call run_request again on a Permanent Redirect response" do
-        http_response = Net::HTTPMovedPermanently.new("1.1", "301", "That's Bob's job")
-        http_response.add_field("location", @url.path)
-        http_response.stub!(:read_body)
-        @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
-        lambda { @rest.run_request(:GET, @url) }.should raise_error(Chef::Exceptions::RedirectLimitExceeded)
+      %w[ HTTPFound HTTPMovedPermanently HTTPSeeOther HTTPUseProxy HTTPTemporaryRedirect HTTPMultipleChoice ].each do |resp_name|
+        it "should call run_request again on a #{resp_name} response" do
+          resp_cls  = Net.const_get(resp_name)
+          resp_code = Net::HTTPResponse::CODE_TO_OBJ.keys.detect { |k| Net::HTTPResponse::CODE_TO_OBJ[k] == resp_cls }
+          http_response = resp_cls.new("1.1", resp_code, "bob somewhere else")
+          http_response.add_field("location", @url.path)
+          http_response.stub!(:read_body)
+
+          @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
+          lambda { @rest.run_request(:GET, @url) }.should raise_error(Chef::Exceptions::RedirectLimitExceeded)
+        end
+      end
+
+      # CHEF-3140
+      context "when configured to disable compression" do
+        before do
+          @rest = Chef::REST.new(@base_url, nil, nil, :disable_gzip => true)
+        end
+
+        it "does not accept encoding gzip" do
+          @rest.send(:build_headers, :GET, @url, {}).should_not have_key("Accept-Encoding")
+        end
+
+        it "does not decompress a response encoded as gzip" do
+          @http_response.add_field("content-encoding", "gzip")
+          request = Net::HTTP::Get.new(@url.path)
+          Net::HTTP::Get.should_receive(:new).and_return(request)
+          # will raise a Zlib error if incorrect
+          @rest.api_request(:GET, @url, {}).should == "ninja"
+        end
       end
 
       it "should show the JSON error message on an unsuccessful request" do
@@ -236,6 +258,22 @@ describe Chef::REST do
         @rest.stub!(:sleep)
         @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
         lambda {@rest.run_request(:GET, @url)}.should raise_error(Net::HTTPFatalError)
+      end
+
+      it "adds the rest_request object to any http exception raised" do
+        @http_response = Net::HTTPServerError.new("1.1", "500", "drooling from inside of mouth")
+        http_response = Net::HTTPServerError.new("1.1", "500", "drooling from inside of mouth")
+        http_response.stub!(:read_body)
+        @rest.stub!(:sleep)
+        @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
+        exception = begin
+          @rest.api_request(:GET, @url, {})
+        rescue => e
+          e
+        end
+
+        e.chef_rest_request.url.should == @url
+        e.chef_rest_request.method.should == :GET
       end
 
       describe "streaming downloads to a tempfile" do
@@ -388,24 +426,19 @@ describe Chef::REST do
         @rest.api_request(:GET, @url, {}).should == {"ohai2u"=>"json_api"}
       end
 
-      it "should call run_request again on a Redirect response" do
-        http_response = Net::HTTPFound.new("1.1", "302", "bob is taking care of that one for me today")
-        http_response.add_field("location", @url.path)
-        http_response.stub!(:read_body)
+      %w[ HTTPFound HTTPMovedPermanently HTTPSeeOther HTTPUseProxy HTTPTemporaryRedirect HTTPMultipleChoice ].each do |resp_name|
+        it "should call api_request again on a #{resp_name} response" do
+          resp_cls  = Net.const_get(resp_name)
+          resp_code = Net::HTTPResponse::CODE_TO_OBJ.keys.detect { |k| Net::HTTPResponse::CODE_TO_OBJ[k] == resp_cls }
+          http_response = Net::HTTPFound.new("1.1", resp_code, "bob is somewhere else again")
+          http_response.add_field("location", @url.path)
+          http_response.stub!(:read_body)
 
-        @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
+          @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
 
-        lambda { @rest.api_request(:GET, @url) }.should raise_error(Chef::Exceptions::RedirectLimitExceeded)
-      end
-
-      it "should call run_request again on a Permanent Redirect response" do
-        http_response = Net::HTTPMovedPermanently.new("1.1", "301", "That's Bob's job")
-        http_response.add_field("location", @url.path)
-        http_response.stub!(:read_body)
-        @http_client.stub!(:request).and_yield(http_response).and_return(http_response)
-
-        lambda { @rest.api_request(:GET, @url) }.should raise_error(Chef::Exceptions::RedirectLimitExceeded)
-      end
+          lambda { @rest.api_request(:GET, @url) }.should raise_error(Chef::Exceptions::RedirectLimitExceeded)
+        end
+       end
 
       it "should show the JSON error message on an unsuccessful request" do
         http_response = Net::HTTPServerError.new("1.1", "500", "drooling from inside of mouth")

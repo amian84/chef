@@ -17,13 +17,14 @@
 #
 
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 describe Chef::Provider::Breakpoint do
   
   before do
     @resource = Chef::Resource::Breakpoint.new
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @collection = mock("resource collection")
     @run_context.stub!(:resource_collection).and_return(@collection)
     @provider = Chef::Provider::Breakpoint.new(@resource, @run_context)

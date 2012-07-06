@@ -18,220 +18,104 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..","..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Cron::Solaris do
-  before(:each) do
+  before do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::Cron.new("cronhole some stuff")
     @new_resource.user "root"
     @new_resource.minute "30"
     @new_resource.command "/bin/true"
 
     @provider = Chef::Provider::Cron::Solaris.new(@new_resource, @run_context)
-    @provider.current_resource = @current_resource
   end
 
-  describe "when examining the current system state" do
-    before do
+  it "should inherit from Chef::Provider:Cron" do
+    @provider.should be_a(Chef::Provider::Cron)
+  end
+
+  describe "read_crontab" do
+    before :each do
       @status = mock("Status", :exitstatus => 0)
-      @stdin = StringIO.new
-      @stderr = StringIO.new
-      @stdout = StringIO.new(<<-CRON)
-# Chef Name: cronhole some stuff
+      @stdout = StringIO.new(<<-CRONTAB)
+0 2 * * * /some/other/command
+
+# Chef Name: something else
 * 5 * * * /bin/true
-CRON
-      @pid = 2342
+
+# Another comment
+      CRONTAB
+      @provider.stub!(:popen4).and_yield(1234, StringIO.new, @stdout, StringIO.new).and_return(@status)
     end
 
-    it "should report if it can't find the cron entry" do
-      @provider.stub!(:popen4).and_return(@status)
-      Chef::Log.should_receive(:debug).with("#{@new_resource} cron '#{@new_resource.name}' not found")
-      @provider.load_current_resource
+    it "should call crontab -l with the user" do
+      @provider.should_receive(:popen4).with("crontab -l #{@new_resource.user}").and_return(@status)
+      @provider.send(:read_crontab)
     end
 
-    it "should report an empty crontab" do
-      @status = mock("Status", :exitstatus => 1)
-      @provider.stub!(:popen4).and_return(@status)
-      Chef::Log.should_receive(:debug).with("#{@new_resource} cron empty for '#{@new_resource.user}'")
-      @provider.load_current_resource
+    it "should return the contents of the crontab" do
+      crontab = @provider.send(:read_crontab)
+      crontab.should == <<-CRONTAB
+0 2 * * * /some/other/command
+
+# Chef Name: something else
+* 5 * * * /bin/true
+
+# Another comment
+CRONTAB
     end
 
-    it "should report finding a match if the entry exists" do
-      @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-      Chef::Log.should_receive(:debug).with("#{@new_resource} found cron '#{@new_resource.name}'")
-      @provider.load_current_resource
+    it "should return nil if the user has no crontab" do
+      status = mock("Status", :exitstatus => 1)
+      @provider.stub!(:popen4).and_return(status)
+      @provider.send(:read_crontab).should == nil
     end
 
-    it "should not fail if there's an existing cron with a numerical argument" do
-      @stdout = StringIO.new(<<-CRON)
-# Chef Name: foo[bar] (baz)
-21 */4 * * * some_prog 1234567
-CRON
-      @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-      lambda {
-        @provider.load_current_resource
-      }.should_not raise_error
+    it "should raise an exception if another error occurs" do
+      status = mock("Status", :exitstatus => 2)
+      @provider.stub!(:popen4).and_return(status)
+      lambda do
+        @provider.send(:read_crontab)
+      end.should raise_error(Chef::Exceptions::Cron, "Error determining state of #{@new_resource.name}, exit: 2")
     end
   end
 
-  describe "when the current crontab state is known" do
-    before do
-      @current_resource = Chef::Resource::Cron.new("cronhole some stuff")
-      @current_resource.user "root"
-      @current_resource.minute "30"
-      @current_resource.command "/bin/true"
-
-      @provider.current_resource = @current_resource
-
+  describe "write_crontab" do
+    before :each do
       @status = mock("Status", :exitstatus => 0)
-      @stdin = StringIO.new
-      @stdout = StringIO.new(<<-CRON)
-# Chef Name: bar
-* 10 * * * /bin/false
-CRON
-      @stderr = StringIO.new
-      @pid = 2342
+      @provider.stub!(:run_command).and_return(@status)
+      @tempfile = mock("foo", :path => "/tmp/foo", :close => true, :binmode => nil)
+      Tempfile.stub!(:new).and_return(@tempfile)
+      @tempfile.should_receive(:flush)
+      @tempfile.should_receive(:chmod).with(420)
+      @tempfile.should_receive(:close!)
     end
 
-
-    describe Chef::Provider::Cron::Solaris, "compare_cron" do
-      %w{ minute hour day month weekday command mailto path shell home }.each do |attribute|
-        it "should return true if #{attribute} doesn't match" do
-          @new_resource.should_receive(attribute).exactly(2).times.and_return(true)
-          @current_resource.should_receive(attribute).once.and_return(false)
-          @provider.compare_cron.should eql(true)
-        end
-      end
-
-      it "should return false if the objects are identical" do
-        @provider.compare_cron.should eql(false)
-      end
+    it "should call crontab for the user" do
+      @provider.should_receive(:run_command).with(hash_including(:user => @new_resource.user))
+      @tempfile.should_receive(:<<).with("Foo")
+      @provider.send(:write_crontab, "Foo")
     end
 
-
-    describe Chef::Provider::Cron::Solaris, "action_create" do
-      it "should add the cron entry if cron exists" do
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_receive(:info).with("cron[cronhole some stuff] added crontab entry")
-        @provider.action_create
+    it "should call crontab with a file containing the crontab" do
+      @provider.should_receive(:run_command) do |args|
+        (args[:command] =~ %r{\A/usr/bin/crontab (/\S+)\z}).should be_true
+        $1.should == "/tmp/foo"
+        @status
       end
-
-      it "should create the cron entry even if cron is empty" do
-        @stdout = StringIO.new(<<-CRON)
-# Chef Name: bar
-* 10 * * * /bin/false
-# Chef Name: foo[bar] (baz)
-* 5 * * * /bin/true
-CRON
-        @provider.cron_empty=true
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_receive(:info).with("cron[cronhole some stuff] added crontab entry")
-        @provider.action_create
-      end
-
-      it "should update the cron entry if it exists and has changed" do
-        @provider.current_resource = @current_resource
-        @stdout = StringIO.new(<<-CRON)
-# Chef Name: bar
-* 10 * * * /bin/false
-# Chef Name: foo[bar] (baz)
-* 5 * * * /bin/true
-CRON
-        @provider.cron_exists=true
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_receive(:info).with("cron[cronhole some stuff] updated crontab entry")
-        @provider.should_receive(:compare_cron).once.and_return(true)
-        @provider.action_create
-      end
-
-      it "should not update the cron entry if it exists and has not changed" do
-        @stdout = StringIO.new(<<-CRON)
-# Chef Name: bar
-* 10 * * * /bin/false
-# Chef Name: foo[bar] (baz)
-30 * * * * /bin/true
-CRON
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_not_receive(:info).with("#{@new_resource} updated crontab entry")
-        Chef::Log.should_receive(:debug).with("#{@new_resource} skipping existing cron entry '#{@new_resource.name}'")
-        @provider.should_receive(:compare_cron).once.and_return(false)
-        @provider.cron_exists = true
-        @provider.action_create
-      end
-
-      it "should update the cron entry if it exists and has changed environment variables" do
-        @provider.current_resource = @current_resource
-        @stdout = StringIO.new(<<-CRON)
-# Chef Name: bar
-* 10 * * * /bin/false
-# Chef Name: foo[bar] (baz)
-MAILTO=warn@example.com
-30 * * * * /bin/true
-CRON
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_receive(:info).with("cron[cronhole some stuff] updated crontab entry")
-        @provider.cron_exists = true
-        @provider.should_receive(:compare_cron).once.and_return(true)
-        @provider.action_create
-      end
-
-      it "should update the cron entry if it exists and has no environment variables" do
-        resource = Chef::Resource::Cron.new("lobster rage")
-        resource.name "lobster rage"
-        resource.minute "30"
-        resource.hour "*"
-        resource.day "*"
-        resource.month "*"
-        resource.weekday "*"
-        resource.mailto "test@example.com"
-        resource.path nil
-        resource.shell nil
-        resource.home nil
-        resource.command "/bin/true"
-
-        provider = Chef::Provider::Cron::Solaris.new(resource, @run_context)
-        provider.current_resource = @current_resource
-
-        @stdout = StringIO.new(<<-CRON)
-# Chef Name: lobster rage
-* 10 * * * /bin/false
-# Chef Name: foo[bar] (baz)
-30 * * * * /bin/true
-CRON
-        provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_receive(:info).with("cron[lobster rage] updated crontab entry")
-        provider.cron_exists = true
-        provider.should_receive(:compare_cron).once.and_return(true)
-        provider.action_create
-      end
+      @tempfile.should_receive(:<<).with("Foo\n# wibble\n wah!!")
+      @provider.send(:write_crontab, "Foo\n# wibble\n wah!!")
     end
 
-    describe Chef::Provider::Cron::Solaris, "action_delete" do
-      it "should delete the cron entry if it exists" do
-        @stdout = StringIO.new(<<-C)
-# Chef Name: bar
-* 10 * * * /bin/false
-# Chef Name: foo[bar] (baz)
-* 30 * * * /bin/true
-C
-        @provider.cron_exists=true
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_receive(:info).with("cron[cronhole some stuff] deleted crontab entry")
-        @provider.action_delete
-
-      end
-
-      it "should not delete the cron entry if it does not exist" do
-        @stdout = StringIO.new(<<-C)
-# Chef Name: bar
-* 10 * * * /bin/false
-C
-        @provider.stub!(:popen4).and_yield(@pid, @stdin, @stdout, @stderr).and_return(@status)
-        Chef::Log.should_not_receive(:info).with("cron[bar] deleted crontab entry")
-        @provider.action_delete
-      end
+    it "should raise an exception if the command returns non-zero" do
+      @tempfile.should_receive(:<<).with("Foo")
+      @status.stub!(:exitstatus).and_return(1)
+      lambda do
+        @provider.send(:write_crontab, "Foo")
+      end.should raise_error(Chef::Exceptions::Cron, "Error updating state of #{@new_resource.name}, exit: 1")
     end
   end
 end

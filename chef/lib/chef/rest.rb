@@ -28,6 +28,10 @@ require 'tempfile'
 require 'chef/rest/auth_credentials'
 require 'chef/rest/rest_request'
 require 'chef/monkey_patches/string'
+require 'chef/monkey_patches/net_http'
+require 'chef/config'
+
+
 
 class Chef
   # == Chef::REST
@@ -61,6 +65,8 @@ class Chef
       @sign_on_redirect, @sign_request = true, true
       @redirects_followed = 0
       @redirect_limit = 10
+      @disable_gzip = false
+      handle_options(options)
     end
 
     def signing_key_filename
@@ -198,7 +204,8 @@ class Chef
           end
         end
 
-        if res.kind_of?(Net::HTTPSuccess)
+        case res
+        when Net::HTTPSuccess
           if res['content-type'] =~ /json/
             Chef::JSONCompat.from_json(response_body)
           else
@@ -210,10 +217,10 @@ class Chef
               response_body
             end
           end
-        elsif res.kind_of?(Net::HTTPFound) or res.kind_of?(Net::HTTPMovedPermanently)
-          follow_redirect {run_request(method, create_url(res['location']), headers, false, nil, raw)}
-        elsif res.kind_of?(Net::HTTPNotModified)
+        when Net::HTTPNotModified # Must be tested before Net::HTTPRedirection because it's subclass.
           false
+        when Net::HTTPRedirection
+          follow_redirect {run_request(method, create_url(res['location']), headers, false, nil, raw)}
         else
           if res['content-type'] =~ /json/
             exception = Chef::JSONCompat.from_json(response_body)
@@ -236,44 +243,55 @@ class Chef
       headers = build_headers(method, url, headers, json_body)
 
       retriable_rest_request(method, url, json_body, headers) do |rest_request|
-        response = rest_request.call {|r| r.read_body}
+        begin
+          response = rest_request.call {|r| r.read_body}
 
-        response_body = decompress_body(response)
+          response_body = decompress_body(response)
 
-        if response.kind_of?(Net::HTTPSuccess)
-          if response['content-type'] =~ /json/
-            Chef::JSONCompat.from_json(response_body.chomp)
+          if response.kind_of?(Net::HTTPSuccess)
+            if response['content-type'] =~ /json/
+              Chef::JSONCompat.from_json(response_body.chomp)
+            else
+              Chef::Log.warn("Expected JSON response, but got content-type '#{response['content-type']}'")
+              response_body
+            end
+          elsif redirect_location = redirected_to(response)
+            follow_redirect {api_request(:GET, create_url(redirect_location))}
           else
-            Chef::Log.warn("Expected JSON response, but got content-type '#{response['content-type']}'")
-            response_body
-          end
-        elsif redirect_location = redirected_to(response)
-          follow_redirect {api_request(:GET, create_url(redirect_location))}
-        else
-          # have to decompress the body before making an exception for it. But the body could be nil.
-          response.body.replace(decompress_body(response)) if response.body.respond_to?(:replace)
+            # have to decompress the body before making an exception for it. But the body could be nil.
+            response.body.replace(decompress_body(response)) if response.body.respond_to?(:replace)
 
-          if response['content-type'] =~ /json/
-            exception = Chef::JSONCompat.from_json(response_body)
-            msg = "HTTP Request Returned #{response.code} #{response.message}: "
-            msg << (exception["error"].respond_to?(:join) ? exception["error"].join(", ") : exception["error"].to_s)
-            Chef::Log.info(msg)
+            if response['content-type'] =~ /json/
+              exception = Chef::JSONCompat.from_json(response_body)
+              msg = "HTTP Request Returned #{response.code} #{response.message}: "
+              msg << (exception["error"].respond_to?(:join) ? exception["error"].join(", ") : exception["error"].to_s)
+              Chef::Log.info(msg)
+            end
+            response.error!
           end
-          response.error!
+        rescue Exception => e
+          if e.respond_to?(:chef_rest_request=)
+            e.chef_rest_request = rest_request
+          end
+          raise
         end
       end
     end
 
     def decompress_body(response)
-      case response[CONTENT_ENCODING]
-      when GZIP
-        Chef::Log.debug "decompressing gzip response"
-        Zlib::Inflate.new(Zlib::MAX_WBITS + 16).inflate(response.body)
-      when DEFLATE
-        Chef::Log.debug "decompressing deflate response"
-        Zlib::Inflate.inflate(response.body)
-      else
+      if gzip_disabled?
         response.body
+      else
+        case response[CONTENT_ENCODING]
+        when GZIP
+          Chef::Log.debug "decompressing gzip response"
+          Zlib::Inflate.new(Zlib::MAX_WBITS + 16).inflate(response.body)
+        when DEFLATE
+          Chef::Log.debug "decompressing deflate response"
+          Zlib::Inflate.inflate(response.body)
+        else
+          response.body
+        end
       end
     end
 
@@ -287,28 +305,35 @@ class Chef
     def streaming_request(url, headers, &block)
       headers = build_headers(:GET, url, headers, nil, true)
       retriable_rest_request(:GET, url, nil, headers) do |rest_request|
-        tempfile = nil
-        response = rest_request.call do |r|
-          if block_given? && r.kind_of?(Net::HTTPSuccess)
-            begin
-              tempfile = stream_to_tempfile(url, r, &block)
-              yield tempfile
-            ensure
-              tempfile.close!
+        begin
+          tempfile = nil
+          response = rest_request.call do |r|
+            if block_given? && r.kind_of?(Net::HTTPSuccess)
+              begin
+                tempfile = stream_to_tempfile(url, r, &block)
+                yield tempfile
+              ensure
+                tempfile.close!
+              end
+            else
+              tempfile = stream_to_tempfile(url, r)
             end
-          else
-            tempfile = stream_to_tempfile(url, r)
           end
-        end
-        if response.kind_of?(Net::HTTPSuccess)
-          tempfile
-        elsif redirect_location = redirected_to(response)
-          # TODO: test tempfile unlinked when following redirects.
-          tempfile && tempfile.close!
-          follow_redirect {streaming_request(create_url(redirect_location), {}, &block)}
-        else
-          tempfile && tempfile.close!
-          response.error!
+          if response.kind_of?(Net::HTTPSuccess)
+            tempfile
+          elsif redirect_location = redirected_to(response)
+            # TODO: test tempfile unlinked when following redirects.
+            tempfile && tempfile.close!
+            follow_redirect {streaming_request(create_url(redirect_location), {}, &block)}
+          else
+            tempfile && tempfile.close!
+            response.error!
+          end
+        rescue Exception => e
+          if e.respond_to?(:chef_rest_request=)
+            e.chef_rest_request = rest_request
+          end
+          raise
         end
       end
     end
@@ -389,11 +414,10 @@ class Chef
     private
 
     def redirected_to(response)
-      if response.kind_of?(Net::HTTPFound) || response.kind_of?(Net::HTTPMovedPermanently)
-        response['location']
-      else
-        nil
-      end
+      return nil  unless response.kind_of?(Net::HTTPRedirection)
+      # Net::HTTPNotModified is undesired subclass of Net::HTTPRedirection so test for this
+      return nil  if response.kind_of?(Net::HTTPNotModified)
+      response['location']
     end
 
     def build_headers(method, url, headers={}, json_body=false, raw=false)
@@ -402,7 +426,7 @@ class Chef
       headers['Accept']       = "application/json" unless raw
       headers["Content-Type"] = 'application/json' if json_body
       headers['Content-Length'] = json_body.bytesize.to_s if json_body
-      headers[RESTRequest::ACCEPT_ENCODING] = RESTRequest::ENCODING_GZIP_DEFLATE
+      headers[RESTRequest::ACCEPT_ENCODING] = RESTRequest::ENCODING_GZIP_DEFLATE unless gzip_disabled?
       headers.merge!(authentication_headers(method, url, json_body)) if sign_requests?
       headers.merge!(Chef::Config[:custom_http_headers]) if Chef::Config[:custom_http_headers]
       headers
@@ -418,15 +442,19 @@ class Chef
       # Kudos to _why!
       size, total = 0, response.header['Content-Length'].to_i
 
-      inflater = case response[CONTENT_ENCODING]
-      when GZIP
-        Chef::Log.debug "decompressing gzip stream"
-        Zlib::Inflate.new(Zlib::MAX_WBITS + 16)
-      when DEFLATE
-        Chef::Log.debug "decompressing inflate stream"
-        Zlib::Inflate.new
-      else
+      inflater = if gzip_disabled?
         NoopInflater.new
+      else
+        case response[CONTENT_ENCODING]
+        when GZIP
+          Chef::Log.debug "decompressing gzip stream"
+          Zlib::Inflate.new(Zlib::MAX_WBITS + 16)
+        when DEFLATE
+          Chef::Log.debug "decompressing inflate stream"
+          Zlib::Inflate.new
+        else
+          NoopInflater.new
+        end
       end
 
       response.read_body do |chunk|
@@ -438,6 +466,27 @@ class Chef
     rescue Exception
       tf.close!
       raise
+    end
+
+    # gzip is disabled using the disable_gzip => true option in the
+    # constructor. When gzip is disabled, no 'Accept-Encoding' header will be
+    # set, and the response will not be decompressed, no matter what the
+    # Content-Encoding header of the response is. The intended use case for
+    # this is to work around situations where you request +file.tar.gz+, but
+    # the server responds with a content type of tar and a content encoding of
+    # gzip, tricking the client into decompressing the response so you end up
+    # with a tar archive (no gzip) named file.tar.gz
+    def gzip_disabled?
+      @disable_gzip
+    end
+
+    def handle_options(opts)
+      opts.each do |name, value|
+        case name.to_s
+        when 'disable_gzip'
+          @disable_gzip = value
+        end
+      end
     end
 
   end

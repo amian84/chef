@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.dirname(__FILE__) + "/../../spec_helper")
+require 'spec_helper'
 
 describe Chef::Util::FileEdit do
 
@@ -114,6 +114,22 @@ HOSTS
       @fedit.write_file
       newfile = File.new(@tempfile.path).readlines
       newfile[1].should match(/new/)
+    end
+  end
+
+  describe "insert_line_if_no_match" do
+    it "should search for match and insert the given line if no line match" do
+      @fedit.insert_line_if_no_match(/pattern/, "new line inserted")
+      @fedit.write_file
+      newfile = File.new(@tempfile.path).readlines
+      newfile.last.should match(/new/)
+    end
+
+    it "should do nothing if there is a match" do
+      @fedit.insert_line_if_no_match(/localhost/, "replacement")
+      @fedit.write_file
+      newfile = File.new(@tempfile.path).readlines
+      newfile[1].should_not match(/replacement/)
     end
   end
 end

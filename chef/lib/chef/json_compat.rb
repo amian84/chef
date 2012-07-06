@@ -18,6 +18,7 @@
 # Wrapper class for interacting with JSON.
 
 require 'json'
+require 'yajl'
 
 class Chef
   class JSONCompat

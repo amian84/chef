@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::File do
 
@@ -74,6 +74,41 @@ describe Chef::Resource::File do
     lambda { @resource.path "/tmp" }.should_not raise_error(ArgumentError)
     @resource.path.should eql("/tmp")
     lambda { @resource.path Hash.new }.should raise_error(ArgumentError)
+  end
+
+  describe "when it has a path, owner, group, mode, and checksum" do
+    before do
+      @resource.path("/tmp/foo.txt")
+      @resource.owner("root")
+      @resource.group("wheel")
+      @resource.mode("0644")
+      @resource.checksum("1" * 64)
+    end
+
+    it "describes its state" do
+      state = @resource.state
+      state[:owner].should == "root"
+      state[:group].should == "wheel"
+      state[:mode].should == "0644"
+      state[:checksum].should == "1" * 64
+    end
+
+    it "returns the file path as its identity" do
+      @resource.identity.should == "/tmp/foo.txt"
+    end
+
+  end
+
+  describe "when access controls are set on windows", :windows_only => true do
+    before do
+      @resource.rights :read, "Everyone"
+      @resource.rights :full_control, "DOMAIN\User"
+    end
+    it "describes its state including windows ACL attributes" do
+      state = @resource.state
+      state.rights.should == [ {:permissions => :read, :principals => "Everyone"},
+                               {:permissions => :full_control, :principals => "DOMAIN\User"} ]
+    end
   end
 
 end

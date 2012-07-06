@@ -16,12 +16,13 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::Group::Groupadd, "set_options" do
   before do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::Group.new("aj")
     @new_resource.gid(50)
     @new_resource.members(["root", "aj"])
@@ -61,23 +62,14 @@ describe Chef::Provider::Group::Groupadd, "set_options" do
   end
 
   describe "when we want to create a system group" do
-    it "should set not groupadd when system is false" do
+    it "should not set groupadd_options '-r' when system is false" do
       @new_resource.system(false)
-      @provider.groupadd_options.should == ""
+      @provider.groupadd_options.should_not =~ /-r/
     end
 
-    ["centos", "redhat", "scientific", "fedora"].each do |os|
-      it "should set groupadd -r for #{os}" do
-        @new_resource.system(true)
-        @node.automatic_attrs[:platform] = os
-        @provider.groupadd_options.should == " -r"
-      end
-    end
-
-    it "should not set groupadd -r for other systems" do
+    it "should set groupadd -r if system is true" do
       @new_resource.system(true)
-      @node.automatic_attrs[:platform] = "fakeos"
-      @provider.groupadd_options.should_not == " -r"
+      @provider.groupadd_options.should == " -r"
     end
   end
 end
@@ -104,82 +96,66 @@ describe Chef::Provider::Group::Groupadd, "create_group" do
   end
 end
 
-describe Chef::Provider::Group::Groupadd, "manage_group" do
+describe Chef::Provider::Group::Groupadd do
   before do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::Group.new("aj")
     @provider = Chef::Provider::Group::Groupadd.new(@new_resource, @run_context)
     @provider.stub!(:run_command).and_return(true)
     @provider.stub!(:set_options).and_return(" monkey")
-    @provider.stub!(:modify_group_members).and_return(true)
   end
 
-  it "should run groupmod with the return of set_options" do
-    @provider.should_receive(:run_command).with({ :command => "groupmod monkey" }).and_return(true)
-    @provider.manage_group
+  describe "manage group" do
+
+    it "should run groupmod with the return of set_options" do
+      @provider.stub!(:modify_group_members).and_return(true)
+      @provider.should_receive(:run_command).with({ :command => "groupmod monkey" }).and_return(true)
+      @provider.manage_group
+    end
+
+    it "should modify the group members" do
+      @provider.should_receive(:modify_group_members).and_return(true)
+      @provider.manage_group
+    end
   end
 
-  it "should modify the group members" do
-    @provider.should_receive(:modify_group_members).and_return(true)
-    @provider.manage_group
-  end
-end
+  describe "remove_group" do
 
-describe Chef::Provider::Group::Groupadd, "remove_group" do
-  before do
-    @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
-    @new_resource = Chef::Resource::Group.new("aj")
-    @provider = Chef::Provider::Group::Groupadd.new(@new_resource, @run_context)
-    @provider.stub!(:run_command).and_return(true)
+    it "should run groupdel with the new resources group name" do
+      @provider.should_receive(:run_command).with({ :command => "groupdel aj" }).and_return(true)
+      @provider.remove_group
+    end
   end
 
-  it "should run groupdel with the new resources group name" do
-    @provider.should_receive(:run_command).with({ :command => "groupdel aj" }).and_return(true)
-    @provider.remove_group
-  end
-end
+  describe "modify_group_members" do
 
-describe Chef::Provider::Group::Groupadd, "modify_group_members" do
-  before do
-    @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
-    @new_resource = Chef::Resource::Group.new("aj")
-    @new_resource.members(["all", "your", "base"])
-    @new_resource.append(false)
-    @provider = Chef::Provider::Group::Groupadd.new(@new_resource, @run_context)
-    @provider.stub!(:run_command).and_return(true)
+    it "should raise an error when calling modify_group_members" do
+      lambda { @provider.modify_group_members ; @provider.converge }.should raise_error(Chef::Exceptions::Group, "you must override modify_group_members in #{@provider.to_s}")
+    end
   end
 
-  it "should raise an error when calling modify_group_members" do
-    lambda { @provider.modify_group_members }.should raise_error(Chef::Exceptions::Group, "you must override modify_group_members in #{@provider.to_s}")
-  end
-end
+  describe "load_current_resource" do
+    before do
+      File.stub!(:exists?).and_return(false)
+      @provider.define_resource_requirements
+    end
+    it "should raise an error if the required binary /usr/sbin/groupadd doesn't exist" do
+      File.should_receive(:exists?).with("/usr/sbin/groupadd").and_return(false)
+      lambda { @provider.process_resource_requirements }.should raise_error(Chef::Exceptions::Group)
+    end
+    it "should raise an error if the required binary /usr/sbin/groupmod doesn't exist" do
+      File.should_receive(:exists?).with("/usr/sbin/groupadd").and_return(true)
+      File.should_receive(:exists?).with("/usr/sbin/groupmod").and_return(false)
+      lambda { @provider.process_resource_requirements }.should raise_error(Chef::Exceptions::Group)
+    end
+    it "should raise an error if the required binary /usr/sbin/groupdel doesn't exist" do
+      File.should_receive(:exists?).with("/usr/sbin/groupadd").and_return(true)
+      File.should_receive(:exists?).with("/usr/sbin/groupmod").and_return(true)
+      File.should_receive(:exists?).with("/usr/sbin/groupdel").and_return(false)
+      lambda { @provider.process_resource_requirements }.should raise_error(Chef::Exceptions::Group)
+    end
 
-describe Chef::Provider::Group::Usermod, "load_current_resource" do
-  before do
-    @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
-    Chef::Node.stub!(:new).and_return(@node)
-    @new_resource = Chef::Resource::Group.new("aj")
-    @provider = Chef::Provider::Group::Usermod.new(@new_resource, @run_context)
-    File.stub!(:exists?).and_return(false)
-  end
-
-  it "should raise an error if the required binary /usr/sbin/groupadd doesn't exist" do
-    File.should_receive(:exists?).with("/usr/sbin/groupadd").and_return(false)
-    lambda { @provider.load_current_resource }.should raise_error(Chef::Exceptions::Group)
-  end
-  it "should raise an error if the required binary /usr/sbin/groupmod doesn't exist" do
-    File.should_receive(:exists?).with("/usr/sbin/groupadd").and_return(true)
-    File.should_receive(:exists?).with("/usr/sbin/groupmod").and_return(false)
-    lambda { @provider.load_current_resource }.should raise_error(Chef::Exceptions::Group)
-  end
-  it "should raise an error if the required binary /usr/sbin/groupdel doesn't exist" do
-    File.should_receive(:exists?).with("/usr/sbin/groupadd").and_return(true)
-    File.should_receive(:exists?).with("/usr/sbin/groupmod").and_return(true)
-    File.should_receive(:exists?).with("/usr/sbin/groupdel").and_return(false)
-    lambda { @provider.load_current_resource }.should raise_error(Chef::Exceptions::Group)
   end
 end

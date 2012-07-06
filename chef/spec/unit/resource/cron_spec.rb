@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::Cron do
 
@@ -96,6 +96,12 @@ describe Chef::Resource::Cron do
   it "should allow you to specify the shell to run the command with" do
     @resource.shell "/bin/zsh"
     @resource.shell.should eql("/bin/zsh")
+  end
+
+  it "should allow you to specify environment variables hash" do
+    env = {"TEST" => "LOL"}
+    @resource.environment env
+    @resource.environment.should eql(env)
   end
 
   it "should allow * for all time and date values" do

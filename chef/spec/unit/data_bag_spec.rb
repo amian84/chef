@@ -6,9 +6,9 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 require 'chef/data_bag'
 
 describe Chef::DataBag do
@@ -61,7 +61,7 @@ describe Chef::DataBag do
 
     %w{
       name
-    }.each do |t| 
+    }.each do |t|
       it "should match '#{t}'" do
         @deserial.send(t.to_sym).should == @data_bag.send(t.to_sym)
       end
@@ -69,6 +69,40 @@ describe Chef::DataBag do
 
   end
 
+  describe "when saving" do 
+    before do
+      @data_bag.name('piggly_wiggly')
+      @rest = mock("Chef::REST")
+      Chef::REST.stub!(:new).and_return(@rest)
+    end
+
+    it "should update the data bag when it already exists" do
+      @rest.should_receive(:put_rest).with("data/piggly_wiggly", @data_bag) 
+      @data_bag.save
+    end
+
+    it "should create the data bag when it is not found" do 
+      exception = mock("404 error", :code => "404")
+      @rest.should_receive(:put_rest).and_raise(Net::HTTPServerException.new("foo", exception))
+      @rest.should_receive(:post_rest).with("data", @data_bag)
+      @data_bag.save
+    end 
+
+    describe "when whyrun mode is enabled" do
+      before do
+        Chef::Config[:why_run] = true
+      end
+      after do
+        Chef::Config[:why_run] = false
+      end
+      it "should not save" do
+        @rest.should_not_receive(:put_rest)
+        @rest.should_not_receive(:post_rest)
+        @data_bag.save
+      end
+    end
+
+  end
   describe "when loading" do
     describe "from an API call" do
       before do
@@ -104,6 +138,12 @@ describe Chef::DataBag do
         File.should_receive(:directory?).with('/var/chef/data_bags').and_return(true)
         Dir.should_receive(:glob).with('/var/chef/data_bags/foo/*.json').and_return([])
         Chef::DataBag.load('foo')
+      end
+
+      it "should get the data bag from the data_bag_path by symbolic name" do
+        File.should_receive(:directory?).with('/var/chef/data_bags').and_return(true)
+        Dir.should_receive(:glob).with('/var/chef/data_bags/foo/*.json').and_return([])
+        Chef::DataBag.load(:foo)
       end
 
       it "should return the data bag" do

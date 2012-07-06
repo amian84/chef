@@ -19,7 +19,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Recipe do
   before(:each) do
@@ -27,7 +27,8 @@ describe Chef::Recipe do
     @cookbook_collection = Chef::CookbookCollection.new(Chef::CookbookLoader.new(@cookbook_repo))
     @node = Chef::Node.new
     @node[:tags] = Array.new
-    @run_context = Chef::RunContext.new(@node, @cookbook_collection)
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, @cookbook_collection, @events)
     @recipe = Chef::Recipe.new("hjk", "test", @run_context)
 
     # Shef/ext.rb is on the run path, and it defines

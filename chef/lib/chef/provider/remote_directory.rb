@@ -40,8 +40,13 @@ class Chef
         )
         files_to_transfer.each do |cookbook_file_relative_path|
           create_cookbook_file(cookbook_file_relative_path)
-          files_to_purge.delete(::File.dirname(::File.join(@new_resource.path, cookbook_file_relative_path)))
+          # the file is removed from the purge list
           files_to_purge.delete(::File.join(@new_resource.path, cookbook_file_relative_path))
+          # parent directories are also removed from the purge list
+          directories=::File.dirname(::File.join(@new_resource.path, cookbook_file_relative_path)).split(::File::SEPARATOR)
+          for i in 0..directories.length-1
+            files_to_purge.delete(::File.join(directories[0..i]))
+          end
         end
         purge_unmanaged_files(files_to_purge)
       end
@@ -57,12 +62,16 @@ class Chef
       def purge_unmanaged_files(unmanaged_files)
         if @new_resource.purge
           unmanaged_files.sort.reverse.each do |f|
-            if ::File.directory?(f)
-              Dir::rmdir(f)
-              Chef::Log.debug("#{@new_resource} removed directory #{f}")
+            if ::File.directory?(f) && !::File.symlink?(f)
+              converge_by("delete unmanaged directory #{f}") do
+                Dir::rmdir(f)
+                Chef::Log.debug("#{@new_resource} removed directory #{f}")
+              end
             else
-              ::File.delete(f)
-              Chef::Log.debug("#{@new_resource} deleted file #{f}")
+              converge_by("delete unmanaged file #{f}") do
+                ::File.delete(f)
+                Chef::Log.debug("#{@new_resource} deleted file #{f}")
+              end
             end
           end
         end

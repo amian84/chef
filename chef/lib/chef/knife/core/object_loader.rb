@@ -24,6 +24,11 @@ class Chef
         attr_reader :ui
         attr_reader :klass
 
+        class ObjectType
+          FILE = 1
+          FOLDER = 2
+        end
+
         def initialize(klass, ui)
           @klass = klass
           @ui = ui
@@ -31,12 +36,13 @@ class Chef
 
         def load_from(repo_location, *components)
           unless object_file = find_file(repo_location, *components)
-            ui.error "Could not find or open file for #{components.join(' ')}"
+            ui.error "Could not find or open file '#{components.last}' in current directory or in '#{repo_location}/#{components.join('/')}'"
             exit 1
           end
           object_from_file(object_file)
         end
 
+        # When someone makes this awesome, please update the above error message.
         def find_file(repo_location, *components)
           if file_exists_and_is_readable?(File.expand_path( components.last ))
             File.expand_path( components.last )
@@ -50,10 +56,41 @@ class Chef
           end
         end
 
+        # Find all objects in the given location
+        # If the object type is File it will look for all *.{json,rb}
+        # files, otherwise it will lookup for folders only (useful for
+        # data_bags)
+        #
+        # @param [String] path - base look up location
+        #
+        # @return [Array<String>] basenames of the found objects
+        #
+        # @api public
+        def find_all_objects(path)
+          path = File.join(path, '*')
+          path << '.{json,rb}'
+          objects = Dir.glob(File.expand_path(path))
+          objects.map { |o| File.basename(o) }
+        end
+
+        def find_all_object_dirs(path)
+          path = File.join(path, '*')
+          objects = Dir.glob(File.expand_path(path))
+          objects.delete_if { |o| !File.directory?(o) }
+          objects.map { |o| File.basename(o) }
+        end
+
         def object_from_file(filename)
           case filename
           when /\.(js|json)$/
-            Chef::JSONCompat.from_json(IO.read(filename))
+            r = Yajl::Parser.parse(IO.read(filename))
+
+            # Chef::DataBagItem doesn't work well with the json_create method
+            if @klass == Chef::DataBagItem
+              r
+            else
+              @klass.json_create(r)
+            end
           when /\.rb$/
             r = klass.new
             r.from_file(filename)

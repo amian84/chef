@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Resource::Mdadm do
 
@@ -56,6 +56,16 @@ describe Chef::Resource::Mdadm do
   it "should allow you to set the level attribute" do
     @resource.level 1
     @resource.level.should eql(1)
+  end
+
+  it "should allow you to set the metadata attribute" do
+    @resource.metadata "1.2"
+    @resource.metadata.should eql("1.2")
+  end
+
+  it "should allow you to set the bitmap attribute" do
+    @resource.metadata "internal"
+    @resource.metadata.should eql("internal")
   end
 
   it "should allow you to set the devices attribute" do

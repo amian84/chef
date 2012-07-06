@@ -16,12 +16,13 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "spec_helper"))
+require 'spec_helper'
 
 describe Chef::Provider::ErlCall do
   before(:each) do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
 
     @new_resource = Chef::Resource::ErlCall.new("test", @node)
     @new_resource.code("io:format(\"burritos\", []).")
@@ -59,6 +60,7 @@ describe Chef::Provider::ErlCall do
       Process.should_receive(:wait).with(@pid)
 
       @provider.action_run
+      @provider.converge
 
       @stdin.string.should == "#{@new_resource.code}\n"
     end
@@ -76,9 +78,11 @@ describe Chef::Provider::ErlCall do
       Process.should_receive(:wait).with(@pid)
 
       @provider.action_run
+      @provider.converge
 
       @stdin.string.should == "#{@new_resource.code}\n"
     end
   end
 
 end
+

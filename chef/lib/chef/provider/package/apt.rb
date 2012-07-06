@@ -40,8 +40,10 @@ class Chef
         def check_package_state(package)
           Chef::Log.debug("#{@new_resource} checking package status for #{package}")
           installed = false
+          # Use apt cache release option only if provider was explicitly defined
+          aptcache_options = "-o APT::Default-Release=#{@new_resource.default_release}" if @new_resource.provider && @new_resource.default_release
 
-          shell_out!("apt-cache policy #{package}").stdout.each_line do |line|
+          shell_out!("apt-cache#{expand_options(aptcache_options)} policy #{package}").stdout.each_line do |line|
             case line
             when /^\s{2}Installed: (.+)$/
               installed_version = $1
@@ -116,17 +118,14 @@ class Chef
           )
         end
 
-        def preseed_package(name, version)
-          preseed_file = get_preseed_file(name, version)
-          if preseed_file
-            Chef::Log.info("#{@new_resource} pre-seeding package installation instructions")
-            run_command_with_systems_locale(
-              :command => "debconf-set-selections #{preseed_file}",
-              :environment => {
-                "DEBIAN_FRONTEND" => "noninteractive"
-              }
-            )
-          end
+        def preseed_package(preseed_file)
+          Chef::Log.info("#{@new_resource} pre-seeding package installation instructions")
+          run_command_with_systems_locale(
+            :command => "debconf-set-selections #{preseed_file}",
+            :environment => {
+              "DEBIAN_FRONTEND" => "noninteractive"
+            }
+          )
         end
 
         def reconfig_package(name, version)

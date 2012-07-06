@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-require File.expand_path(File.join(File.dirname(__FILE__), "..", "..", "..", "spec_helper"))
+require 'spec_helper'
 
 class Chef
   class Util
@@ -35,7 +35,8 @@ REMOTE = "\\\\server-name\\path"
 describe Chef::Provider::Mount::Windows do
   before(:each) do
     @node = Chef::Node.new
-    @run_context = Chef::RunContext.new(@node, {})
+    @events = Chef::EventDispatch::Dispatcher.new
+    @run_context = Chef::RunContext.new(@node, {}, @events)
     @new_resource = Chef::Resource::Mount.new("X:")
     @new_resource.device GUID
     @current_resource = Chef::Resource::Mount.new("X:")
