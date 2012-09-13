@@ -207,7 +207,7 @@ E
 
       desc "prints information about chef"
       def version
-        puts  "This is shef, the Chef shell.\n" +
+        puts  "This is the chef-shell.\n" +
               " Chef Version: #{::Chef::VERSION}\n" +
               " http://www.opscode.com/chef\n" +
               " http://wiki.opscode.com/display/chef/Home"
@@ -508,6 +508,28 @@ E
       def databags(databag_name)
         @named_databags_wrappers ||= {}
         @named_databags_wrappers[databag_name] ||= Shef::NamedDataBagWrapper.new(databag_name)
+      end
+
+      desc "Find and edit environments via the API"
+      explain(<<-E)
+## SUMMARY ##
+  +environments+ allows you to query and edit environments on your Chef server.
+
+## SUBCOMMANDS ##
+  * all       (list)
+  * show      (load)
+  * search    (find)
+  * transform (bulk_edit)
+
+## SEE ALSO ##
+  See the help for +nodes+ for more information about the subcommands.
+E
+      subcommands :all        => "list all environments",
+                  :show       => "load an environment by name",
+                  :search     => "search for environments",
+                  :transform  => "edit all environments via a code block and save them"
+      def environments
+        @environments ||= Shef::ModelWrapper.new(Chef::Environment)
       end
 
       desc "A REST Client configured to authenticate with the API"

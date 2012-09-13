@@ -16,6 +16,7 @@
 # limitations under the License.
 #
 
+require 'chef'
 require 'chef/application'
 require 'chef/client'
 require 'chef/config'
@@ -109,8 +110,6 @@ class Chef
               Chef::Log.error("Sleeping for #{Chef::Config[:interval]} seconds before trying again")
               client_sleep Chef::Config[:interval]
               retry
-            ensure
-              GC.start
             end
           else # PAUSED or IDLE
             sleep 5

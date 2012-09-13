@@ -24,24 +24,40 @@
 require 'etc'
 
 shared_context "setup correct permissions" do
-  before :each, { :requires_root => true, :unix_only => true } do
-    File.chown(Etc.getpwnam('nobody').uid, 1337, path)
-    File.chmod(0776, path)
+  context "on unix", :unix_only do
+    context "with root", :requires_root do
+      before :each do
+        File.chown(Etc.getpwnam('nobody').uid, 1337, path)
+        File.chmod(0776, path)
+      end
+    end
+
+    context "without root", :requires_unprivileged_user do
+      before :each do
+        File.chmod(0776, path)
+      end
+    end
   end
-  before :each, { :requires_unprivileged_user => true, :unix_only => true } do
-    File.chmod(0776, path)
-  end
+
   # FIXME: windows
 end
 
 shared_context "setup broken permissions" do
-  before :each, { :requires_root => true, :unix_only => true } do
-    File.chown(0, 0, path)
-    File.chmod(0644, path)
+  context "on unix", :unix_only do
+    context "with root", :requires_root do
+      before :each do
+        File.chown(0, 0, path)
+        File.chmod(0644, path)
+      end
+    end
+  
+    context "without root", :requires_unprivileged_user do
+      before :each do
+        File.chmod(0644, path)
+      end
+    end
   end
-  before :each, { :requires_unprivileged_user => true, :unix_only => true } do
-    File.chmod(0644, path)
-  end
+
   # FIXME: windows
 end
 
@@ -71,7 +87,7 @@ shared_examples_for "a securable resource" do
       mode_string = '776'
       resource.mode mode_string
       resource.run_action(:create)
-      pending('Linux does not support lchmod', :if => resource.instance_of?(Chef::Resource::Link) && !os_x?) do
+      pending('Linux does not support lchmod', :if => resource.instance_of?(Chef::Resource::Link) && !os_x? && !freebsd?) do
         (File.lstat(path).mode & 007777).should == (mode_string.oct & 007777)
       end
     end
@@ -80,7 +96,7 @@ shared_examples_for "a securable resource" do
       mode_integer = 0776
       resource.mode mode_integer
       resource.run_action(:create)
-      pending('Linux does not support lchmod', :if => resource.instance_of?(Chef::Resource::Link) && !os_x?) do
+      pending('Linux does not support lchmod', :if => resource.instance_of?(Chef::Resource::Link) && !os_x? && !freebsd?) do
         (File.lstat(path).mode & 007777).should == (mode_integer & 007777)
       end
     end

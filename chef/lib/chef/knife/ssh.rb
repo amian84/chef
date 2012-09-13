@@ -79,7 +79,7 @@ class Chef
         :short => "-G GATEWAY",
         :long => "--ssh-gateway GATEWAY",
         :description => "The ssh gateway",
-        :proc => Proc.new { |key| Chef::Config[:knife][:ssh_gatewa] = key }
+        :proc => Proc.new { |key| Chef::Config[:knife][:ssh_gateway] = key }
 
       option :identity_file,
         :short => "-i IDENTITY_FILE",
@@ -124,7 +124,13 @@ class Chef
                  q = Chef::Search::Query.new
                  @action_nodes = q.search(:node, @name_args[0])[0]
                  @action_nodes.each do |item|
-                   i = format_for_display(item)[config[:attribute]]
+                   # if a command line attribute was not passed, and we have a cloud public_hostname, use that.
+                   # see #configure_attribute for the source of config[:attribute] and config[:override_attribute]
+                   if !config[:override_attribute] && item[:cloud] and item[:cloud][:public_hostname]
+                     i = format_for_display(item)[:cloud][:public_hostname]
+                   else
+                     i = format_for_display(item)[config[:attribute]]
+                   end
                    r.push(i) unless i.nil?
                  end
                  r
@@ -185,6 +191,7 @@ class Chef
         exit_status = 0
         subsession ||= session
         command = fixup_sudo(command)
+        command.force_encoding('binary')
         subsession.open_channel do |ch|
           ch.request_pty
           ch.exec command do |ch, success|
@@ -334,6 +341,12 @@ class Chef
       end
 
       def configure_attribute
+        # Setting 'knife[:ssh_attribute] = "foo"' in knife.rb => Chef::Config[:knife][:ssh_attribute] == 'foo'
+        # Running 'knife ssh -a foo' => both Chef::Config[:knife][:ssh_attribute] && config[:attribute] == foo
+        # Thus we can differentiate between a config file value and a command line override at this point by checking config[:attribute]
+        # We can tell here if fqdn was passed from the command line, rather than being the default, by checking config[:attribute]
+        # However, after here, we cannot tell these things, so we must preserve config[:attribute]
+        config[:override_attribute] = config[:attribute]
         config[:attribute] = (Chef::Config[:knife][:ssh_attribute] ||
                               config[:attribute] ||
                               "fqdn").strip

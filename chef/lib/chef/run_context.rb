@@ -35,7 +35,7 @@ class Chef
 
     # Needs to be settable so deploy can run a resource_collection independent
     # of any cookbooks.
-    attr_accessor :resource_collection
+    attr_accessor :resource_collection, :immediate_notification_collection, :delayed_notification_collection
 
     attr_reader :events
 
@@ -48,6 +48,8 @@ class Chef
       @node = node
       @cookbook_collection = cookbook_collection
       @resource_collection = Chef::ResourceCollection.new
+      @immediate_notification_collection = Hash.new {|h,k| h[k] = []}
+      @delayed_notification_collection = Hash.new {|h,k| h[k] = []}
       @definitions = Hash.new
       @events = events
 
@@ -75,6 +77,9 @@ class Chef
           # TODO: timh/cw, 5-14-2010: It's distasteful to be including
           # the DSL in a class outside the context of the DSL
           include_recipe(recipe)
+        rescue Chef::Exceptions::RecipeNotFound => e
+          @events.recipe_not_found(e)
+          raise
         rescue Exception => e
           path = resolve_recipe(recipe)
           @events.recipe_file_load_failed(path, e)
@@ -90,6 +95,40 @@ class Chef
       cookbook.recipe_filenames_by_name[recipe_short_name]
     end
 
+    def notifies_immediately(notification)
+      nr = notification.notifying_resource
+      if nr.instance_of?(Chef::Resource)
+        @immediate_notification_collection[nr.name] << notification
+      else
+        @immediate_notification_collection[nr.to_s] << notification
+      end
+    end
+
+    def notifies_delayed(notification)
+      nr = notification.notifying_resource
+      if nr.instance_of?(Chef::Resource)
+        @delayed_notification_collection[nr.name] << notification
+      else
+        @delayed_notification_collection[nr.to_s] << notification
+      end
+    end
+
+    def immediate_notifications(resource)
+      if resource.instance_of?(Chef::Resource)
+        return @immediate_notification_collection[resource.name]
+      else
+        return @immediate_notification_collection[resource.to_s]
+      end
+    end
+
+    def delayed_notifications(resource)
+      if resource.instance_of?(Chef::Resource)
+        return @delayed_notification_collection[resource.name]
+      else
+        return @delayed_notification_collection[resource.to_s]
+      end
+    end
+
     private
 
     def load_libraries
@@ -102,7 +141,7 @@ class Chef
           @events.library_file_loaded(filename)
         rescue Exception => e
           # TODO wrap/munge exception to highlight syntax/name/no method errors.
-          @events.library_load_failed(filename, e)
+          @events.library_file_load_failed(filename, e)
           raise
         end
       end

@@ -20,6 +20,7 @@ require 'chef/provider/file'
 require 'chef/provider/directory'
 require 'chef/resource/directory'
 require 'chef/resource/remote_file'
+require 'chef/mixin/file_class'
 require 'chef/platform'
 require 'uri'
 require 'tempfile'
@@ -29,6 +30,7 @@ require 'set'
 class Chef
   class Provider
     class RemoteDirectory < Chef::Provider::Directory
+      include Chef::Mixin::FileClass
 
       def action_create
         super
@@ -62,11 +64,14 @@ class Chef
       def purge_unmanaged_files(unmanaged_files)
         if @new_resource.purge
           unmanaged_files.sort.reverse.each do |f|
-            if ::File.directory?(f) && !::File.symlink?(f)
-              converge_by("delete unmanaged directory #{f}") do
-                Dir::rmdir(f)
-                Chef::Log.debug("#{@new_resource} removed directory #{f}")
-              end
+            # file_class comes from Chef::Mixin::FileClass
+            if ::File.directory?(f) && !Chef::Platform.windows? && !file_class.symlink?(f.dup) 
+              # Linux treats directory symlinks as files
+              # Remove a directory as a directory when not on windows if it is not a symlink
+              purge_directory(f)
+            elsif ::File.directory?(f) && Chef::Platform.windows?
+              # Windows treats directory symlinks as directories so we delete them here
+              purge_directory(f)
             else
               converge_by("delete unmanaged file #{f}") do
                 ::File.delete(f)
@@ -74,6 +79,13 @@ class Chef
               end
             end
           end
+        end
+      end
+
+      def purge_directory(dir)
+        converge_by("delete unmanaged directory #{dir}") do
+          Dir::rmdir(dir)
+          Chef::Log.debug("#{@new_resource} removed directory #{dir}")
         end
       end
 

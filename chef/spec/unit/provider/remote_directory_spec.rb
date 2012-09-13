@@ -19,6 +19,11 @@
 require 'spec_helper'
 require 'digest/md5'
 require 'tmpdir'
+require 'chef/mixin/file_class'
+
+class Chef::CFCCheck
+  include Chef::Mixin::FileClass
+end
 
 describe Chef::Provider::RemoteDirectory do
   before do
@@ -153,14 +158,20 @@ describe Chef::Provider::RemoteDirectory do
         @provider.action = :create
         @provider.run_action
 
+        @fclass = Chef::CFCCheck.new
+
         Dir.mktmpdir do |tmp_dir|
-          FileUtils.ln_s(tmp_dir, symlinked_dir_path)
-          ::File.exist?(symlinked_dir_path).should be_true
+          begin
+            @fclass.file_class.symlink(tmp_dir.dup, symlinked_dir_path)
+            ::File.exist?(symlinked_dir_path).should be_true
 
-          @provider.run_action
+            @provider.run_action
 
-          ::File.exist?(symlinked_dir_path).should be_false
-          ::File.exist?(tmp_dir).should be_true
+            ::File.exist?(symlinked_dir_path).should be_false
+            ::File.exist?(tmp_dir).should be_true
+          rescue Chef::Exceptions::Win32APIError => e
+            pending "This must be run as an Administrator to create symlinks"
+          end
         end
       end
     end

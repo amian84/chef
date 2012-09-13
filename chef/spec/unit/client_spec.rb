@@ -24,7 +24,7 @@ require 'chef/run_context'
 require 'chef/rest'
 require 'rbconfig'
 
-describe Chef::Client do
+shared_examples_for Chef::Client do
   before do
     Chef::Log.logger = Logger.new(StringIO.new)
 
@@ -51,25 +51,51 @@ describe Chef::Client do
     @client.node = @node
   end
 
+  describe "authentication protocol selection" do
+    after do
+      Chef::Config[:authentication_protocol_version] = "1.0"
+    end
+
+    context "when the node name is <= 90 bytes" do
+      it "does not force the authentication protocol to 1.1" do
+        Chef::Config[:node_name] = ("f" * 90)
+        # ugly that this happens as a side effect of a getter :(
+        @client.node_name
+        Chef::Config[:authentication_protocol_version].should == "1.0"
+      end
+    end
+
+    context "when the node name is > 90 bytes" do
+      it "sets the authentication protocol to version 1.1" do
+        Chef::Config[:node_name] = ("f" * 91)
+        # ugly that this happens as a side effect of a getter :(
+        @client.node_name
+        Chef::Config[:authentication_protocol_version].should == "1.1"
+      end
+    end
+  end
+
   describe "run" do
+
     it "should identify the node and run ohai, then register the client" do
       mock_chef_rest_for_node = mock("Chef::REST (node)")
       mock_chef_rest_for_client = mock("Chef::REST (client)")
       mock_chef_rest_for_node_save = mock("Chef::REST (node save)")
       mock_chef_runner = mock("Chef::Runner")
 
-      # --Client#register
+      # --Client.register
       #   Make sure Client#register thinks the client key doesn't
       #   exist, so it tries to register and create one.
       File.should_receive(:exists?).with(Chef::Config[:client_key]).exactly(1).times.and_return(false)
 
-      #   Client#register will register with the validation client name.
-      Chef::REST.should_receive(:new).with(Chef::Config[:client_url], Chef::Config[:validation_client_name], Chef::Config[:validation_key]).and_return(mock_chef_rest_for_client)
-      mock_chef_rest_for_client.should_receive(:register).with(@fqdn, Chef::Config[:client_key]).and_return(true)
-      #   Client#register will then turn around create another
+      #   Client.register will register with the validation client name.
+      Chef::REST.should_receive(:new).with(Chef::Config[:client_url], Chef::Config[:validation_client_name], Chef::Config[:validation_key]).exactly(1).and_return(mock_chef_rest_for_client)
+      mock_chef_rest_for_client.should_receive(:register).with(@fqdn, Chef::Config[:client_key]).exactly(1).and_return(true)
+      #   Client.register will then turn around create another
+      
       #   Chef::REST object, this time with the client key it got from the
       #   previous step.
-      Chef::REST.should_receive(:new).with(Chef::Config[:chef_server_url], @fqdn, Chef::Config[:client_key]).and_return(mock_chef_rest_for_node)
+      Chef::REST.should_receive(:new).with(Chef::Config[:chef_server_url], @fqdn, Chef::Config[:client_key]).exactly(1).and_return(mock_chef_rest_for_node)
 
       # --Client#build_node
       #   looks up the node, which we will return, then later saves it.
@@ -98,19 +124,45 @@ describe Chef::Client do
       Chef::REST.should_receive(:new).with(Chef::Config[:chef_server_url]).and_return(mock_chef_rest_for_node_save)
       mock_chef_rest_for_node_save.should_receive(:put_rest).with("nodes/#{@fqdn}", @node).and_return(true)
 
+      Chef::RunLock.any_instance.should_receive(:acquire)
+      Chef::RunLock.any_instance.should_receive(:release)
+
+      # Post conditions: check that node has been filled in correctly
       @client.should_receive(:run_started)
       @client.should_receive(:run_completed_successfully)
 
-
+      if(Chef::Config[:client_fork])
+        require 'stringio'
+        if(Chef::Config[:pipe_node])
+          pipe_sim = StringIO.new
+          pipe_sim.should_receive(:close).exactly(4).and_return(nil)
+          res = ''
+          pipe_sim.should_receive(:puts) do |string|
+            res.replace(string)
+          end
+          pipe_sim.should_receive(:gets).and_return(res)
+          Chef::CouchDB.should_receive(:new).and_return(nil)
+          IO.should_receive(:pipe).and_return([pipe_sim, pipe_sim])
+          IO.should_receive(:select).and_return(true)
+        end
+        proc_ret = Class.new.new
+        proc_ret.should_receive(:success?).and_return(true)
+        Process.should_receive(:waitpid2).and_return([1, proc_ret])
+        @client.should_receive(:exit).and_return(nil)
+        @client.should_receive(:fork) do |&block|
+          block.call
+        end
+      end
+      
       # This is what we're testing.
       @client.run
 
-
-      # Post conditions: check that node has been filled in correctly
-      @node.automatic_attrs[:platform].should == "example-platform"
-      @node.automatic_attrs[:platform_version].should == "example-platform-1.0"
+      if(!Chef::Config[:client_fork] || Chef::Config[:pipe_node])
+        @node.automatic_attrs[:platform].should == "example-platform"
+        @node.automatic_attrs[:platform_version].should == "example-platform-1.0"
+      end
     end
-
+    
     describe "when notifying other objects of the status of the chef run" do
       before do
         Chef::Client.clear_notifications
@@ -223,4 +275,15 @@ describe Chef::Client do
     end
   end
 
+end
+
+describe Chef::Client do
+  it_behaves_like Chef::Client
+end
+
+describe "Chef::Client Forked" do
+  it_behaves_like Chef::Client
+  before do
+    Chef::Config[:client_fork] = true
+  end
 end

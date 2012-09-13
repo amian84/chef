@@ -53,6 +53,37 @@ describe Chef::ScanAccessControl do
       File.should_receive(:exist?).with(@new_resource.path).and_return(true)
     end
 
+    describe "when new_resource does not specify mode, user or group" do
+      # these tests are necessary for minitest-chef-handler to use as an API, see CHEF-3235
+      before do
+        @scanner.set_all!
+      end
+
+      it "sets the mode of the current resource to the current mode as a String" do
+        @current_resource.mode.should == "644"
+      end
+
+      context "on unix", :unix_only do
+        it "sets the group of the current resource to the current group as a String" do
+          @current_resource.group.should == Etc.getgrgid(0).name
+        end
+  
+        it "sets the owner of the current resource to the current owner as a String" do
+          @current_resource.user.should == "root"
+        end
+      end
+
+      context "on windows", :windows_only do
+        it "sets the group of the current resource to the current group as a String" do
+          @current_resource.group.should == 0
+        end
+  
+        it "sets the owner of the current resource to the current owner as a String" do
+          @current_resource.user.should == 0
+        end
+      end
+    end
+
     describe "when new_resource specifies the mode with a string" do
       before do
         @new_resource.mode("0755")

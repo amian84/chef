@@ -169,6 +169,12 @@ class Chef::Application::Client < Chef::Application
     :long         => '--why-run',
     :description  => 'Enable whyrun mode',
     :boolean      => true
+  
+  option :client_fork,
+    :short        => "-f",
+    :long         => "--fork",
+    :description  => "Fork client",
+    :boolean      => true
 
   attr_reader :chef_client_json
 
@@ -302,8 +308,6 @@ class Chef::Application::Client < Chef::Application
           Chef::Application.debug_stacktrace(e)
           Chef::Application.fatal!("#{e.class}: #{e.message}", 1)
         end
-      ensure
-        GC.start
       end
     end
   end

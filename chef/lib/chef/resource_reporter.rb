@@ -54,10 +54,10 @@ class Chef
         as_hash["name"]   = new_resource.name
         as_hash["id"]     = new_resource.identity
         as_hash["after"]  = new_resource.state
-        as_hash["before"] = current_resource.state if current_resource
+        as_hash["before"] = current_resource ? current_resource.state : {}
         as_hash["duration"] = (elapsed_time * 1000).to_i.to_s
-        # TODO: include diffs, etc. here:
-        as_hash["delta"] = ""
+        as_hash["delta"]  = new_resource.diff if new_resource.respond_to?("diff")
+        as_hash["delta"]  = "" if as_hash["delta"].nil?
         # TODO: rename as "action"
         as_hash["result"] = action.to_s
         if success?
@@ -104,6 +104,7 @@ class Chef
       server_response = @rest_client.post_rest(resource_history_url, {:action => :begin})
       run_uri = URI.parse(server_response["uri"])
       @run_id = ::File.basename(run_uri.path)
+      Chef::Log.info("Chef server generated run history id: #{@run_id}")
     rescue Net::HTTPServerException => e
       raise unless e.response.code.to_s == "404"
       Chef::Log.debug("Received 404 attempting to generate run history id (URL Path: #{resource_history_url}), assuming feature is not supported.")
@@ -136,6 +137,8 @@ class Chef
         @pending_update ||= ResourceReport.new_for_exception(new_resource, action)
         @pending_update.exception = exception
       end
+      description = Formatters::ErrorMapper.resource_failed(new_resource, action, exception)
+      @error_descriptions = description.for_json
     end
 
     def resource_completed(new_resource)
@@ -144,8 +147,6 @@ class Chef
         @updated_resources << @pending_update
         @pending_update = nil
       end
-      description = Formatters::ErrorMapper.resource_failed_helper(new_resource, action, exception)
-      @error_descriptions = description.for_json
     end
 
     def run_completed(node)
@@ -186,17 +187,17 @@ class Chef
     end
 
     def run_list_expand_failed(node, exception)
-      description = Formatters::ErrorMapper.run_list_expand_failed_helper(node, exception)
+      description = Formatters::ErrorMapper.run_list_expand_failed(node, exception)
       @error_descriptions = description.for_json
     end
 
     def cookbook_resolution_failed(expanded_run_list, exception)
-      description = Formatters::ErrorMapper.cookbook_resolution_failed_helper(expanded_run_list, exception)
+      description = Formatters::ErrorMapper.cookbook_resolution_failed(expanded_run_list, exception)
       @error_descriptions = description.for_json
     end
 
     def cookbook_sync_failed(cookbooks, exception)
-      description = Formatters::ErrorMapper.cookbook_sync_failed_helper(cookbooks, exception)
+      description = Formatters::ErrorMapper.cookbook_sync_failed(cookbooks, exception)
       @error_descriptions = description.for_json
     end
 

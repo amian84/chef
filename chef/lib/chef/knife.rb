@@ -269,6 +269,10 @@ class Chef
         msg opt_parser
         exit 1
       end
+
+      # copy Mixlib::CLI over so that it cab be configured in knife.rb
+      # config file
+      Chef::Config[:verbosity] = config[:verbosity]
     end
 
     def parse_options(args)
@@ -320,7 +324,7 @@ class Chef
 
       Chef::Config[:color] = config[:color]
 
-      case config[:verbosity]
+      case Chef::Config[:verbosity]
       when 0
         Chef::Config[:log_level] = :error
       when 1
@@ -345,9 +349,11 @@ class Chef
       Chef::Log.level(Chef::Config[:log_level] || :error)
 
       Chef::Log.debug("Using configuration from #{config[:config_file]}")
-
-      if Chef::Config[:node_name].nil?
-        #raise ArgumentError, "No user specified, pass via -u or specifiy 'node_name' in #{config[:config_file] ? config[:config_file] : "~/.chef/knife.rb"}"
+      
+      if Chef::Config[:node_name] && Chef::Config[:node_name].bytesize > 90
+        # node names > 90 bytes only work with authentication protocol >= 1.1
+        # see discussion in config.rb.
+        Chef::Config[:authentication_protocol_version] = "1.1"
       end
     end
 
@@ -401,7 +407,7 @@ class Chef
       enforce_path_sanity
       run
     rescue Exception => e
-      raise if config[:verbosity] == 2
+      raise if Chef::Config[:verbosity] == 2
       humanize_exception(e)
       exit 100
     end

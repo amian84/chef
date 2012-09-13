@@ -41,6 +41,7 @@ require 'chef/formatters/doc'
 require 'chef/formatters/minimal'
 require 'chef/version'
 require 'chef/resource_reporter'
+require 'chef/run_lock'
 require 'ohai'
 require 'rbconfig'
 
@@ -153,59 +154,29 @@ class Chef
     end
 
     # Do a full run for this Chef::Client.  Calls:
+    # * do_run
     #
-    #  * run_ohai - Collect information about the system
-    #  * load_node - Get the last known stage from the server
-    #  * build_node - Merge state with local changes
-    #  * register - If not in solo mode, make sure the server knows about this client
-    #  * sync_cookbooks - If not in solo mode, populate the local cache with the node's cookbooks
-    #  * converge - Bring this system up to date
-    #
+    # This provides a wrapper around #do_run allowing the 
+    # run to be optionally forked.
     # === Returns
-    # true:: Always returns true.
+    # boolean:: Return value from #do_run. Should always returns true.
     def run
-      run_context = nil
-
-      @events.run_start(Chef::VERSION)
-      Chef::Log.info("*** Chef #{Chef::VERSION} ***")
-      enforce_path_sanity
-      run_ohai
-      @events.ohai_completed(node)
-      register unless Chef::Config[:solo]
-
-      load_node
-
-      begin
-        build_node
-
-        run_status.start_clock
-        Chef::Log.info("Starting Chef Run for #{node.name}")
-        run_started
-
-        run_context = setup_run_context
-
-        converge(run_context)
-
-        save_updated_node
-
-        run_status.stop_clock
-        Chef::Log.info("Chef Run complete in #{run_status.elapsed_time} seconds")
-        run_completed_successfully
-        @events.run_completed(node)
+      if(Chef::Config[:client_fork] && Process.respond_to?(:fork))
+        Chef::Log.info "Forking chef instance to converge..."
+        pid = fork do
+          Chef::Log.info "Forked instance now converging"
+          do_run
+          exit
+        end
+        Chef::Log.info "Fork successful. Waiting for new chef pid: #{pid}"
+        result = Process.waitpid2(pid)
+        raise "Forked convergence run failed" unless result.last.success?
+        Chef::Log.info "Forked child successfully reaped (pid: #{pid})"
         true
-      rescue Exception => e
-        run_status.stop_clock
-        run_status.exception = e
-        run_failed
-        Chef::Log.debug("Re-raising exception: #{e.class} - #{e.message}\n#{e.backtrace.join("\n  ")}")
-        @events.run_failed(e)
-        raise
-      ensure
-        run_status = nil
+      else
+        do_run
       end
-      true
     end
-
 
     # Configures the Chef::Cookbook::FileVendor class to fetch file from the
     # server or disk as appropriate, creates the run context for this run, and
@@ -252,6 +223,12 @@ class Chef
       unless name
         msg = "Unable to determine node name: configure node_name or configure the system's hostname and fqdn"
         raise Chef::Exceptions::CannotDetermineNodeName, msg
+      end
+
+      # node names > 90 bytes only work with authentication protocol >= 1.1
+      # see discussion in config.rb.
+      if name.bytesize > 90
+        Chef::Config[:authentication_protocol_version] = "1.1"
       end
 
       name
@@ -402,13 +379,75 @@ class Chef
       runner.converge
       @events.converge_complete
       true
-    rescue Exception => e
+    rescue Exception
       # TODO: should this be a separate #converge_failed(exception) method?
       @events.converge_complete
       raise
     end
 
     private
+
+    # Do a full run for this Chef::Client.  Calls:
+    #
+    #  * run_ohai - Collect information about the system
+    #  * build_node - Get the last known state, merge with local changes
+    #  * register - If not in solo mode, make sure the server knows about this client
+    #  * sync_cookbooks - If not in solo mode, populate the local cache with the node's cookbooks
+    #  * converge - Bring this system up to date
+    #
+    # === Returns
+    # true:: Always returns true.
+    def do_run
+      runlock = RunLock.new(Chef::Config)
+      runlock.acquire
+
+      run_context = nil
+      @events.run_start(Chef::VERSION)
+      Chef::Log.info("*** Chef #{Chef::VERSION} ***")
+      enforce_path_sanity
+      run_ohai
+      @events.ohai_completed(node)
+      register unless Chef::Config[:solo]
+
+      load_node
+
+      begin
+        build_node
+
+        run_status.start_clock
+        Chef::Log.info("Starting Chef Run for #{node.name}")
+        run_started
+
+        run_context = setup_run_context
+
+        converge(run_context)
+
+        save_updated_node
+
+        run_status.stop_clock
+        Chef::Log.info("Chef Run complete in #{run_status.elapsed_time} seconds")
+        run_completed_successfully
+        @events.run_completed(node)
+        true
+      rescue Exception => e
+        # CHEF-3336: Send the error first in case something goes wrong below and we don't know why
+        Chef::Log.debug("Re-raising exception: #{e.class} - #{e.message}\n#{e.backtrace.join("\n  ")}")
+        # If we failed really early, we may not have a run_status yet. Too early for these to be of much use.
+        if run_status
+          run_status.stop_clock
+          run_status.exception = e
+          run_failed
+        end
+        @events.run_failed(e)
+        raise
+      ensure
+        @run_status = nil
+        run_context = nil
+        runlock.release
+        GC.start
+      end
+      true
+    end
 
     # Ensures runlist override contains RunListItem instances
     def runlist_override_sanity_check!

@@ -65,9 +65,7 @@ class Chef
 
     def current_owner
       case new_resource.owner
-      when nil
-        nil
-      when String
+      when String, nil
         lookup_uid
       when Integer
         stat.uid
@@ -78,7 +76,11 @@ class Chef
     end
 
     def lookup_uid
-      Etc.getpwuid(stat.uid).name
+      unless (pwent = Etc.getpwuid(stat.uid)).nil?
+        pwent.name
+      else
+        stat.uid
+      end
     rescue ArgumentError
       stat.uid
     end
@@ -90,9 +92,7 @@ class Chef
 
     def current_group
       case new_resource.group
-      when nil
-        nil
-      when String
+      when String, nil
         lookup_gid
       when Integer
         stat.gid
@@ -103,7 +103,11 @@ class Chef
     end
 
     def lookup_gid
-      Etc.getgrgid(stat.gid).name
+      unless (pwent = Etc.getgrgid(stat.gid)).nil?
+        pwent.name
+      else
+        stat.gid
+      end
     rescue ArgumentError
       stat.gid
     end
@@ -114,9 +118,7 @@ class Chef
 
     def current_mode
       case new_resource.mode
-      when nil
-        nil
-      when String
+      when String, nil
         (stat.mode & 007777).to_s(8)
       when Integer
         stat.mode & 007777
